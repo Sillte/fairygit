@@ -508,13 +508,14 @@ class PullRequestThreads(_PullRequestResource):
             raise ValueError("GitHub did not create the reply in a pending review")
         return result
 
-    def edit_reply(self, comment: GitHubReviewComment, body: str) -> GitHubReviewComment:
+    def edit_reply(self, comment: GitHubReviewComment | str, body: str) -> GitHubReviewComment:
         """Edit the current user's reply only while its review is pending."""
         _validate_comment_body(body)
+        comment_id = comment.id if isinstance(comment, GitHubReviewComment) else comment
         data = _pending_reply_data.validate_python(
             self._client.execute(
                 _PENDING_REPLY_QUERY,
-                {**self._repository_variables(), "commentId": comment.id},
+                {**self._repository_variables(), "commentId": comment_id},
             )
         )
         current = data.node

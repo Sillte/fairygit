@@ -1,3 +1,4 @@
+from .auth import GitHubAuthInfo
 from .comments import (
     GitHubComment,
     GitHubIssueCommentPage,
@@ -11,6 +12,7 @@ from .repository import GitHubRepository
 
 __all__ = [
     "GitHubComment",
+    "GitHubAuthInfo",
     "GitHubIssueCommentPage",
     "GitHubPullRequest",
     "GitHubRepository",
