@@ -1,0 +1,56 @@
+[project]
+name = "fairygit"
+version = "0.1.0"
+description = "Fairies are assorting information about Git/GitHub"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "pydantic>=2.7",
+    "httpx2>=2.0",
+    "click>=8.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fairygit"]
+
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+]
+
+
+# pyproject.toml
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q --show-capture=no"
+testpaths = ["tests"]
+
+
+[tool.ruff]
+fix = true
+line-length = 120
+
+[tool.ruff.lint]
+
+select = ["E", "F", "I"]
+ignore = [
+    "E501", # Exclude specific rule: Line too long
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+
+[tool.ty.rules]
+unused-ignore-comment = "ignore"
+unused-type-ignore-comment = "ignore"
+
+[tool.uv]
+exclude-newer = "1 week"
