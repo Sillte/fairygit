@@ -6,12 +6,15 @@ import httpx2
 class GitHubGraphQLClient:
     """Send authenticated GraphQL requests to GitHub."""
 
+    API_BASE_URL = "https://api.github.com"
+    API_URL = f"{API_BASE_URL}/graphql"
+
     def __init__(self, token: str, timeout: float = 10.0) -> None:
         """Create a GraphQL client with a GitHub access token."""
         if not token:
             raise ValueError("GitHub token must not be empty.")
         self._client = httpx2.Client(
-            base_url="https://api.github.com",
+            base_url=self.API_BASE_URL,
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",

@@ -23,7 +23,7 @@ The primary audience is LLM Agents, but the library itself is designed to be ind
 It provides two interfaces:
 
 - **Python API**: A native interface for Python applications and developers.
-- **CLI**: A JSON-based interface that can be used by different LLM Agent runtimes.
+- **CLI**: A command-line interface that emits JSON for different LLM Agent runtimes.
 
 The CLI can also serve as the foundation for an Agent Skill, allowing an Agent to learn how and when to use the available operations.
 
@@ -116,18 +116,12 @@ The library uses Pydantic models to define its data contracts.
 
 The same models should be usable from both the Python API and the CLI.
 
-The CLI uses JSON as its input and output format.
+The CLI accepts ordinary command-line arguments and emits JSON output.
 
-Example request:
+Example invocation:
 
-```json
-{
-  "operation": "git.diff",
-  "arguments": {
-    "base": "main",
-    "head": "HEAD"
-  }
-}
+```console
+fairygit pr view --local .
 ```
 
 Example response:
@@ -136,18 +130,24 @@ Example response:
 {
   "success": true,
   "result": {
-    "files": [],
-    "total_additions": 12,
-    "total_deletions": 3
+    "body": "Pull request description",
+    "threads": {
+      "items": [],
+      "has_more": false
+    },
+    "issue_comments": {
+      "items": [],
+      "has_more": false
+    }
   }
 }
 ```
 
-The JSON protocol should have the following properties:
+The JSON response format should have the following properties:
 
-- Predictable request and response schemas.
+- Predictable response schemas.
 - Machine-readable error information.
-- Explicit operation names.
+- Explicit command names and options.
 - Consistent serialization.
 - Bounded output for potentially large results.
 
@@ -160,11 +160,12 @@ The Python API and CLI serve different audiences.
 
 Python developers should be able to use native Python objects and Pydantic models.
 
-LLM Agents should be able to invoke operations through a portable JSON interface.
+LLM Agents should be able to invoke operations through portable command-line arguments and consume JSON output.
 
-The CLI is implemented using Typer.
+The CLI is implemented using Click.
+Command-line arguments are ordinary strings and options; responses use JSON.
 
-The CLI command structure and the JSON protocol are separate concerns.
+The CLI command structure and the JSON response schema are separate concerns.
 The command-line interface should not dictate the internal domain model or the Python API.
 
 ## Architecture
@@ -248,6 +249,25 @@ updated_reply = pull_request.threads.edit_reply(reply, "Updated response.")
 
 If you do not already have a pending review on the pull request, `reply()` creates one and leaves it pending. Neither operation submits or publishes the review. Editing checks the current viewer, comment author, reply relationship, and review state before sending the mutation.
 
+### CLI
+
+`fairygit auth status` verifies the configured GitHub credential with the authenticated-user API and returns the account login, profile URL, REST and GraphQL endpoints, REST API version, and OAuth scopes when GitHub reports them. It never outputs the credential.
+
+`fairygit pr view --local PATH` finds the pull request matching the current branch's configured upstream and returns its body, review threads, and issue-style conversation comments as JSON. Set `GH_TOKEN` or `GITHUB_PAT` to authenticate.
+
+The command requires exactly one matching pull request. It returns a JSON error and a non-zero exit status if no pull request matches or the branch matches multiple pull requests. Thread and issue-comment results are bounded to 100 items and include `has_more` when additional results are available.
+
+The [pr-review-draft Skill](./.github/skills/pr-review-draft/SKILL.md) describes how an Agent can use these commands to inspect a PR and prepare pending thread replies.
+
+Pending review replies can be created or edited with:
+
+```console
+fairygit pr thread reply --local PATH --thread-id THREAD_ID --body "Reply text"
+fairygit pr thread edit --local PATH --comment-id COMMENT_ID --body "Updated reply text"
+```
+
+Use `--body -` to read the body from standard input, which is useful for multiline text. The reply command adds the reply to your existing pending review or creates one if needed. The edit command accepts a review comment ID and succeeds only for your own reply in a pending review belonging to the PR matched by `--local`. Both commands return the resulting comment as JSON; neither submits the review.
+
 ### Pagination
 
 Pagination is handled separately for REST and GraphQL APIs.
@@ -275,7 +295,7 @@ The initial dependency choices are intentionally minimal.
 |---|---|
 | Pydantic | Data models and validation |
 | HTTPX2 | GitHub REST and GraphQL communication |
-| Typer | CLI implementation |
+| Click | CLI implementation |
 
 Development and testing dependencies are maintained separately.
 

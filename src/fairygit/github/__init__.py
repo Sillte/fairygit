@@ -1,6 +1,7 @@
 from .clients import GitHubGraphQLClient, GitHubRestClient
 from .context import GitHubContext
 from .models import (
+    GitHubAuthInfo,
     GitHubComment,
     GitHubIssueCommentPage,
     GitHubPullRequest,
@@ -15,6 +16,7 @@ from .models import (
 
 __all__ = [
     "GitHubContext",
+    "GitHubAuthInfo",
     "GitHubComment",
     "GitHubGraphQLClient",
     "GitHubIssueCommentPage",
