@@ -5,9 +5,10 @@ from pathlib import Path
 import httpx2
 import pytest
 from click.testing import CliRunner
-from httpx2_mock import mock_httpx2
+from httpx2_mock import MockRouter, mock_httpx2
 
 from fairygit.cli import app
+from fairygit.github import GitHubAuthInfo, GitHubContext
 
 
 def test_auth_status_reports_account_and_api_information(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -108,17 +109,34 @@ def _create_local_repository(path: Path) -> Path:
     return path
 
 
+def _mock_authenticated_user(router: MockRouter) -> None:
+    router.get("https://api.github.com/user").mock(
+        return_value=httpx2.Response(
+            200,
+            json={
+                "login": "reviewer",
+                "id": 123,
+                "type": "User",
+                "html_url": "https://github.com/reviewer",
+            },
+        )
+    )
+
+
+@pytest.mark.parametrize("exclude_resolved", [False, True])
 def test_pr_view_outputs_body_threads_and_issue_comments_as_json(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    exclude_resolved: bool,
 ) -> None:
     monkeypatch.setenv("GH_TOKEN", "test-token")
     local_path = _create_local_repository(tmp_path / "repo")
     rest_url = "https://api.github.com/repos/acme/widgets/pulls"
     graphql_url = "https://api.github.com/graphql"
     with mock_httpx2(assert_all_called=True) as router:
+        _mock_authenticated_user(router)
         router.get(rest_url).mock(return_value=httpx2.Response(200, json=[_pull_request(12)]))
-        router.post(graphql_url).mock(
+        graphql_route = router.post(graphql_url).mock(
             side_effect=[
                 httpx2.Response(
                     200,
@@ -153,7 +171,10 @@ def test_pr_view_outputs_body_threads_and_issue_comments_as_json(
             ]
         )
 
-        result = CliRunner().invoke(app, ["pr", "view", "--local", str(local_path)])
+        args = ["pr", "view", "--local", str(local_path)]
+        if exclude_resolved:
+            args.append("--exclude-resolved")
+        result = CliRunner().invoke(app, args)
 
     assert result.exit_code == 0
     assert json.loads(result.output) == {
@@ -164,6 +185,7 @@ def test_pr_view_outputs_body_threads_and_issue_comments_as_json(
             "issue_comments": {"items": [], "has_more": False},
         },
     }
+    assert json.loads(graphql_route.calls[0].request.content)["variables"]["includeComments"] == (not exclude_resolved)
 
 
 @pytest.mark.parametrize(
@@ -183,6 +205,7 @@ def test_pr_view_returns_json_error_when_pull_request_is_not_unambiguous(
     local_path = _create_local_repository(tmp_path / "repo")
     rest_url = "https://api.github.com/repos/acme/widgets/pulls"
     with mock_httpx2(assert_all_called=True) as router:
+        _mock_authenticated_user(router)
         router.get(rest_url).mock(return_value=httpx2.Response(200, json=pull_requests))
 
         result = CliRunner().invoke(app, ["pr", "view", "--local", str(local_path)])
@@ -196,6 +219,49 @@ def test_pr_view_returns_json_error_when_pull_request_is_not_unambiguous(
                 "No pull request matches the current local branch."
                 if error_code == "pull_request_not_found"
                 else "Multiple pull requests match the current local branch."
+            ),
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("rest_api_url", "graphql_api_url"),
+    [
+        ("https://ghe.example.com/api/v3", "https://ghe.example.com/api/graphql"),
+        ("https://api.github.com", "https://ghe.example.com/graphql"),
+    ],
+)
+def test_pr_view_rejects_api_endpoint_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    rest_api_url: str,
+    graphql_api_url: str,
+) -> None:
+    monkeypatch.setenv("GH_TOKEN", "test-token")
+    local_path = _create_local_repository(tmp_path / "repo")
+    auth_info = GitHubAuthInfo(
+        login="reviewer",
+        user_id=123,
+        account_type="User",
+        profile_url="https://github.com/reviewer",
+        rest_api_url=rest_api_url,
+        graphql_api_url=graphql_api_url,
+        api_version="2022-11-28",
+        token_scopes=None,
+    )
+    monkeypatch.setattr(GitHubContext, "get_authenticated_user", lambda self: auth_info)
+
+    result = CliRunner().invoke(app, ["pr", "view", "--local", str(local_path)])
+
+    assert result.exit_code == 1
+    assert json.loads(result.output) == {
+        "success": False,
+        "error": {
+            "code": "api_endpoint_mismatch",
+            "message": (
+                "GitHub API endpoints reported by authentication do not match the REST and GraphQL client "
+                f"configuration: reported REST={rest_api_url}, GraphQL={graphql_api_url}; "
+                "configured REST=https://api.github.com, GraphQL=https://api.github.com/graphql."
             ),
         },
     }
@@ -224,6 +290,7 @@ def test_pr_thread_reply_creates_pending_reply(
     rest_url = "https://api.github.com/repos/acme/widgets/pulls"
     graphql_url = "https://api.github.com/graphql"
     with mock_httpx2(assert_all_called=True) as router:
+        _mock_authenticated_user(router)
         router.get(rest_url).mock(return_value=httpx2.Response(200, json=[_pull_request(12)]))
         graphql_route = router.post(graphql_url).mock(
             side_effect=[
@@ -301,6 +368,7 @@ def test_pr_thread_edit_updates_own_pending_reply(
     rest_url = "https://api.github.com/repos/acme/widgets/pulls"
     graphql_url = "https://api.github.com/graphql"
     with mock_httpx2(assert_all_called=True) as router:
+        _mock_authenticated_user(router)
         router.get(rest_url).mock(return_value=httpx2.Response(200, json=[_pull_request(12)]))
         graphql_route = router.post(graphql_url).mock(
             side_effect=[

@@ -1,3 +1,5 @@
+from urllib.parse import urlsplit, urlunsplit
+
 from fairygit.git import GitRepository
 from fairygit.github.clients import GitHubGraphQLClient, GitHubRestClient
 from fairygit.github.clients.credentials import GitHubCredentialProvider
@@ -53,13 +55,17 @@ class GitHubContext:
 
         scopes_header = response.headers.get("X-OAuth-Scopes")
         token_scopes = [scope.strip() for scope in scopes_header.split(",") if scope.strip()] if scopes_header else None
+        response_url = urlsplit(str(response.url))
+        if response_url.path != "/user":
+            raise ValueError("GitHub authenticated-user response came from an unexpected API path")
+        rest_api_url = urlunsplit((response_url.scheme, response_url.netloc, "", "", ""))
         return GitHubAuthInfo(
             login=login,
             user_id=user_id,
             account_type=account_type,
             profile_url=profile_url,
-            rest_api_url=self._rest_client.API_BASE_URL,
-            graphql_api_url=self._graphql_client.API_URL,
+            rest_api_url=rest_api_url,
+            graphql_api_url=f"{rest_api_url}/graphql",
             api_version=self._rest_client.API_VERSION,
             token_scopes=token_scopes,
         )

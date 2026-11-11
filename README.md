@@ -253,9 +253,11 @@ If you do not already have a pending review on the pull request, `reply()` creat
 
 `fairygit auth status` verifies the configured GitHub credential with the authenticated-user API and returns the account login, profile URL, REST and GraphQL endpoints, REST API version, and OAuth scopes when GitHub reports them. It never outputs the credential.
 
-`fairygit pr view --local PATH` finds the pull request matching the current branch's configured upstream and returns its body, review threads, and issue-style conversation comments as JSON. Set `GH_TOKEN` or `GITHUB_PAT` to authenticate.
+PR commands verify the authenticated API address against the REST and GraphQL client endpoints before making PR requests. A mismatch returns an error instead of calling an unexpected API host.
 
-The command requires exactly one matching pull request. It returns a JSON error and a non-zero exit status if no pull request matches or the branch matches multiple pull requests. Thread and issue-comment results are bounded to 100 items and include `has_more` when additional results are available.
+`fairygit pr view --local PATH` finds the pull request matching the current branch's configured upstream and returns its body, review threads, and issue-style conversation comments as JSON. Add `--exclude-resolved` to omit resolved review threads; their comments are not fetched. Set `GH_TOKEN` or `GITHUB_PAT` to authenticate.
+
+The command requires exactly one matching pull request. It returns a JSON error and a non-zero exit status if no pull request matches or the branch matches multiple pull requests. Thread and issue-comment results are bounded to 100 items and include `has_more` when additional results are available. When resolved threads are excluded, the thread limit applies to unresolved threads.
 
 The [pr-review-draft Skill](./.github/skills/pr-review-draft/SKILL.md) describes how an Agent can use these commands to inspect a PR and prepare pending thread replies.
 

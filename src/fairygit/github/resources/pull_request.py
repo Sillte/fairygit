@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 
 _REVIEW_THREADS_QUERY = """
-query($owner: String!, $name: String!, $number: Int!, $first: Int!, $after: String, $commentFirst: Int!) {
+query($owner: String!, $name: String!, $number: Int!, $first: Int!, $after: String, $commentFirst: Int!, $includeComments: Boolean!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       reviewThreads(first: $first, after: $after) {
@@ -29,7 +29,7 @@ query($owner: String!, $name: String!, $number: Int!, $first: Int!, $after: Stri
           line
           isResolved
           isOutdated
-          comments(first: $commentFirst) {
+          comments(first: $commentFirst) @include(if: $includeComments) {
             nodes {
               id
               body
@@ -255,7 +255,7 @@ class _ThreadNode(BaseModel):
     line: int | None
     isResolved: bool
     isOutdated: bool
-    comments: _Connection
+    comments: _Connection | None = None
 
 
 class _ThreadConnection(BaseModel):
@@ -404,11 +404,13 @@ class PullRequestThreads(_PullRequestResource):
         self,
         max_items: int = 100,
         max_comments_per_thread: int = 100,
+        exclude_resolved: bool = False,
     ) -> GitHubReviewThreadPage:
         """List review threads with bounded comments per thread.
 
         ``has_more`` reports omitted threads, and each thread's
         ``comments_has_more`` reports comments omitted at its per-thread limit.
+        When ``exclude_resolved`` is true, resolved threads are skipped.
         """
         _validate_limit(max_items, "max_items")
         _validate_limit(max_comments_per_thread, "max_comments_per_thread")
@@ -417,7 +419,7 @@ class PullRequestThreads(_PullRequestResource):
         cursor: str | None = None
         has_more = False
 
-        while len(threads) < max_items:
+        while True:
             remaining = max_items - len(threads)
             comment_first = min(100, max_comments_per_thread)
             data = _thread_query_data.validate_python(
@@ -425,9 +427,10 @@ class PullRequestThreads(_PullRequestResource):
                     _REVIEW_THREADS_QUERY,
                     {
                         **repository_variables,
-                        "first": min(100, remaining),
+                        "first": 100 if exclude_resolved else min(100, remaining),
                         "after": cursor,
                         "commentFirst": comment_first,
+                        "includeComments": not exclude_resolved,
                     },
                 )
             )
@@ -437,10 +440,33 @@ class PullRequestThreads(_PullRequestResource):
                 raise ValueError("GitHub GraphQL response is missing pull request review threads")
 
             for thread in connection.nodes:
-                comments = list(thread.comments.nodes[:max_comments_per_thread])
-                comments_cursor = thread.comments.pageInfo.endCursor
+                if exclude_resolved and thread.isResolved:
+                    continue
+                if len(threads) >= max_items:
+                    has_more = True
+                    break
+
+                comment_connection = thread.comments
+                if comment_connection is None:
+                    comment_data = _thread_comment_query_data.validate_python(
+                        self._client.execute(
+                            _THREAD_COMMENTS_QUERY,
+                            {
+                                "id": thread.id,
+                                "first": comment_first,
+                                "after": None,
+                            },
+                        )
+                    )
+                    comment_connection = comment_data.node.comments if comment_data.node else None
+                    if comment_connection is None:
+                        raise ValueError("GitHub GraphQL response is missing review thread comments")
+
+                comments = list(comment_connection.nodes[:max_comments_per_thread])
+                comments_cursor = comment_connection.pageInfo.endCursor
                 comments_has_more = (
-                    thread.comments.pageInfo.hasNextPage or len(thread.comments.nodes) > max_comments_per_thread
+                    comment_connection.pageInfo.hasNextPage
+                    or len(comment_connection.nodes) > max_comments_per_thread
                 )
                 if comments_has_more and comments_cursor is None and len(comments) < max_comments_per_thread:
                     raise ValueError("GitHub GraphQL response is missing the review comment cursor")
@@ -477,9 +503,13 @@ class PullRequestThreads(_PullRequestResource):
                 )
 
             has_next_page = connection.pageInfo.hasNextPage
-            has_more = has_next_page or len(connection.nodes) > remaining
-            if not has_next_page or not connection.nodes or len(threads) >= max_items:
-                break
+            if exclude_resolved:
+                if has_more or not has_next_page or not connection.nodes:
+                    break
+            else:
+                has_more = has_next_page or len(connection.nodes) > remaining
+                if not has_next_page or not connection.nodes or len(threads) >= max_items:
+                    break
             cursor = connection.pageInfo.endCursor
             if cursor is None:
                 raise ValueError("GitHub GraphQL response is missing the review thread cursor")

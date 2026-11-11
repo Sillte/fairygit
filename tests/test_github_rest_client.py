@@ -1,3 +1,4 @@
+import json
 import subprocess
 from pathlib import Path
 
@@ -197,6 +198,95 @@ def test_pull_request_lists_review_threads_and_paginates_thread_comments() -> No
     assert graphql_route.calls[0].request.url.path == "/graphql"
     assert graphql_route.calls[0].request.headers["Authorization"] == "Bearer test-token"
     assert "pullRequestReview { state }" in graphql_route.calls[0].request.content.decode()
+
+
+def test_pull_request_can_exclude_resolved_threads_while_paginating() -> None:
+    graphql_url = "https://api.github.com/graphql"
+    rest_url = "https://api.github.com/repos/acme/widgets/pulls"
+    resolved_thread = {
+        "id": "thread-resolved",
+        "path": "src/example.py",
+        "line": 10,
+        "isResolved": True,
+        "isOutdated": False,
+    }
+    unresolved_thread = {
+        "id": "thread-unresolved",
+        "path": "src/example.py",
+        "line": 12,
+        "isResolved": False,
+        "isOutdated": False,
+    }
+    with mock_httpx2(assert_all_called=True) as router:
+        router.get(rest_url).mock(return_value=httpx.Response(200, json=[_pull_request(12)]))
+        graphql_route = router.post(graphql_url).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "repository": {
+                                "pullRequest": {
+                                    "reviewThreads": {
+                                        "nodes": [resolved_thread],
+                                        "pageInfo": {"hasNextPage": True, "endCursor": "thread-cursor"},
+                                    }
+                                }
+                            }
+                        }
+                    },
+                ),
+                httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "repository": {
+                                "pullRequest": {
+                                    "reviewThreads": {
+                                        "nodes": [unresolved_thread],
+                                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                    }
+                                }
+                            }
+                        }
+                    },
+                ),
+                httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "node": {
+                                "comments": {
+                                    "nodes": [
+                                        {
+                                            **_comment("1"),
+                                            "path": "src/example.py",
+                                            "line": 12,
+                                            "replyTo": None,
+                                            "pullRequestReview": {"state": "COMMENTED"},
+                                        }
+                                    ],
+                                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                }
+                            }
+                        }
+                    },
+                ),
+            ]
+        )
+        with GitHubContext(token="test-token") as context:
+            pull_request = context.get_repository("acme", "widgets").pull_requests.list().items[0]
+            thread_page = pull_request.threads.list(max_items=1, exclude_resolved=True)
+
+    assert [thread.id for thread in thread_page.items] == ["thread-unresolved"]
+    assert thread_page.items[0].comments[0].body == "Comment 1"
+    assert thread_page.has_more is False
+    request_payloads = [json.loads(call.request.content) for call in graphql_route.calls]
+    assert len(request_payloads) == 3
+    assert request_payloads[0]["variables"]["includeComments"] is False
+    assert request_payloads[1]["variables"]["after"] == "thread-cursor"
+    assert request_payloads[2]["variables"]["id"] == "thread-unresolved"
+    assert "comments(first: $commentFirst) @include(if: $includeComments)" in request_payloads[0]["query"]
 
 
 def test_thread_reply_is_added_to_existing_pending_review() -> None:

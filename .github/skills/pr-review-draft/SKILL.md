@@ -16,9 +16,15 @@ Use the `fairygit` CLI to inspect the pull request associated with a local repos
 
 These are independent operations, not a mandatory sequence. Choose only the operation needed for the user's request; inspect the PR before drafting or changing a reply.
 
-- Inspect the matching PR with `fairygit pr view --local PATH`, where `PATH` is the local repository directory.
+- Inspect the matching PR with `fairygit pr view --local PATH`, where `PATH` is the local repository directory. If the PR has a very large number of review comments, retry with `--exclude-resolved` to omit resolved review threads and avoid fetching their comments:
+
+   ```console
+   fairygit pr view --local PATH --exclude-resolved
+   ```
+
+  This filters review threads only; published conversation comments are unchanged. If the filtered result still contains around 500 review comments, treat the PR as unusually large and surface that rather than assuming the output is a routine review.
 - Parse stdout as JSON. Continue only when `success` is `true`. If it is `false`, report the `error` and stop.
-- Use `result.body` for the PR description, `result.threads.items` for review threads and their diff comments, and `result.issue_comments.items` for published conversation comments. Treat `threads.has_more`, each thread's `comments_has_more`, and `issue_comments.has_more` as truncation indicators; do not claim the returned results are complete when any is `true`.
+- Use `result.body` for the PR description, `result.threads.items` for review threads and their diff comments, and `result.issue_comments.items` for published conversation comments. With `--exclude-resolved`, `threads.has_more` applies to unresolved threads only. Treat `threads.has_more`, each thread's `comments_has_more`, and `issue_comments.has_more` as truncation indicators; do not claim the returned results are complete when any is `true`.
 - When asked to prepare a new thread reply, pass the selected thread's `id`:
 
    ```console

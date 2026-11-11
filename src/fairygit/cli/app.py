@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from fairygit.git import GitRepository
 from fairygit.github import GitHubContext, GitHubPullRequest
+from fairygit.github.clients import GitHubGraphQLClient, GitHubRestClient
 
 _Result = TypeVar("_Result")
 
@@ -64,6 +65,22 @@ def _current_pull_request(context: GitHubContext, local_repository: GitRepositor
     return pull_requests.items[0]
 
 
+def _verify_api_endpoints(context: GitHubContext) -> None:
+    auth_info = context.get_authenticated_user()
+    expected_endpoints = (
+        GitHubRestClient.API_BASE_URL,
+        GitHubGraphQLClient.API_URL,
+    )
+    discovered_endpoints = (auth_info.rest_api_url, auth_info.graphql_api_url)
+    if discovered_endpoints != expected_endpoints:
+        raise _CliError(
+            "api_endpoint_mismatch",
+            "GitHub API endpoints reported by authentication do not match the REST and GraphQL client configuration: "
+            f"reported REST={auth_info.rest_api_url}, GraphQL={auth_info.graphql_api_url}; "
+            f"configured REST={expected_endpoints[0]}, GraphQL={expected_endpoints[1]}.",
+        )
+
+
 def _run_operation(operation: Callable[[], _Result]) -> _Result:
     try:
         return operation()
@@ -82,16 +99,21 @@ def pr() -> None:
 
 @pr.command()
 @click.option("--local", required=True, help="Path to a local Git repository")
-def view(local: str) -> None:
+@click.option("--exclude-resolved", is_flag=True, help="Omit resolved review threads")
+def view(local: str, exclude_resolved: bool) -> None:
     """Return the current branch's pull request body, review threads, and issue comments."""
 
     def operation() -> dict[str, object]:
         local_repository = GitRepository.from_path(Path(local))
         with GitHubContext() as context:
+            _verify_api_endpoints(context)
             pull_request = _current_pull_request(context, local_repository)
             return {
                 "body": pull_request.body,
-                "threads": pull_request.threads.list(max_items=100).model_dump(mode="json"),
+                "threads": pull_request.threads.list(
+                    max_items=100,
+                    exclude_resolved=exclude_resolved,
+                ).model_dump(mode="json"),
                 "issue_comments": pull_request.issue_comments.list(max_items=100).model_dump(mode="json"),
             }
 
@@ -113,6 +135,7 @@ def reply(local: str, thread_id: str, body: str) -> None:
     def operation() -> dict[str, object]:
         local_repository = GitRepository.from_path(Path(local))
         with GitHubContext() as context:
+            _verify_api_endpoints(context)
             pull_request = _current_pull_request(context, local_repository)
             reply_comment = pull_request.threads.reply(thread_id, _read_body(body))
             return reply_comment.model_dump(mode="json")
@@ -130,6 +153,7 @@ def edit(local: str, comment_id: str, body: str) -> None:
     def operation() -> dict[str, object]:
         local_repository = GitRepository.from_path(Path(local))
         with GitHubContext() as context:
+            _verify_api_endpoints(context)
             pull_request = _current_pull_request(context, local_repository)
             updated_comment = pull_request.threads.edit_reply(comment_id, _read_body(body))
             return updated_comment.model_dump(mode="json")
