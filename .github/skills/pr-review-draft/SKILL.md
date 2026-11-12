@@ -10,16 +10,16 @@ Use the `fairygit` CLI to inspect the pull request associated with a local repos
 ## Setup checks
 
 - Before using the CLI, check that `fairygit` is available. If it is not found, tell the user to install it with `uv tool install git ...`, then stop. Do not install it for the user.
-- Run `fairygit auth status` to verify authentication. If it reports that no GitHub token is configured, tell the user to set `GH_TOKEN` or `GITHUB_PAT` in the environment, then stop. Do not ask the user to paste a token into chat or set one yourself.
+- Run `uvx fairygit auth status` to verify authentication. If it reports that no GitHub token is configured, tell the user to set `GH_TOKEN` or `GITHUB_PAT` in the environment, then stop. Do not ask the user to paste a token into chat or set one yourself.
 
 ## Use only what's needed
 
 These are independent operations, not a mandatory sequence. Choose only the operation needed for the user's request; inspect the PR before drafting or changing a reply.
 
-- Inspect the matching PR with `fairygit pr view --local PATH`, where `PATH` is the local repository directory. If the PR has a very large number of review comments, retry with `--exclude-resolved` to omit resolved review threads and avoid fetching their comments:
+- Inspect the matching PR with `uvx fairygit pr view --local PATH`, where `PATH` is the local repository directory. If the PR has a very large number of review comments, retry with `--exclude-resolved` to omit resolved review threads and avoid fetching their comments:
 
    ```console
-   fairygit pr view --local PATH --exclude-resolved
+   uvx fairygit pr view --local PATH --exclude-resolved
    ```
 
   This filters review threads only; published conversation comments are unchanged. If the filtered result still contains around 500 review comments, treat the PR as unusually large and surface that rather than assuming the output is a routine review.
@@ -28,13 +28,13 @@ These are independent operations, not a mandatory sequence. Choose only the oper
 - When asked to prepare a new thread reply, pass the selected thread's `id`:
 
    ```console
-   fairygit pr thread reply --local PATH --thread-id THREAD_ID --body "Reply text"
+   uvx fairygit pr thread reply --local PATH --thread-id THREAD_ID --body "Reply text"
    ```
 
 - When asked to edit an existing reply, use that review comment's `id` and verify from the fetched thread context that it is the intended reply and is marked `is_pending: true`:
 
    ```console
-   fairygit pr thread edit --local PATH --comment-id COMMENT_ID --body "Updated reply"
+   uvx fairygit pr thread edit --local PATH --comment-id COMMENT_ID --body "Updated reply"
    ```
 
 - A new reply is added to the user's existing pending review, or a pending review is created if needed. The review is not submitted. Editing is allowed only if GitHub confirms the comment is the current user's reply in a pending review belonging to this PR. If a CLI operation fails, report its JSON error and stop.
