@@ -1,9 +1,11 @@
 ---
-name: pr-review-draft
+name: safegit-operations
 description: "Inspect the pull request for a local Git branch and prepare or edit review-thread replies in a pending review. Use when asked to review PR context, draft a thread reply, or update your own pending reply. Never submit or publish a review."
 ---
 
-# PR Review Draft
+# Safe Git Operations
+
+At this stage, this skill covers pull-request inspection and drafting or editing pending review replies.
 
 Use the `fairygit` CLI to inspect the pull request associated with a local repository and, when explicitly requested, create or edit a reply that remains in a pending review.
 

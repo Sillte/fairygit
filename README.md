@@ -259,7 +259,7 @@ PR commands verify the authenticated API address against the REST and GraphQL cl
 
 The command requires exactly one matching pull request. It returns a JSON error and a non-zero exit status if no pull request matches or the branch matches multiple pull requests. Thread and issue-comment results are bounded to 100 items and include `has_more` when additional results are available. When resolved threads are excluded, the thread limit applies to unresolved threads.
 
-The [pr-review-draft Skill](./.github/skills/pr-review-draft/SKILL.md) describes how an Agent can use these commands to inspect a PR and prepare pending thread replies.
+The [safegit-operations Skill](./.github/skills/safegit-operations/SKILL.md) describes how an Agent can use these commands to inspect a PR and prepare pending thread replies.
 
 Pending review replies can be created or edited with:
 
