@@ -5,6 +5,10 @@ from typing import Self
 from pydantic import BaseModel, Field
 
 
+class GitBranchUpstreamNotConfiguredError(ValueError):
+    """Raised when a branch has no configured remote upstream."""
+
+
 class GitRepository(BaseModel):
     """A local Git repository identified by its root directory."""
 
@@ -93,7 +97,9 @@ class GitRepository(BaseModel):
                 text=True,
             )
         except subprocess.CalledProcessError as error:
-            raise ValueError(f"Git branch has no configured upstream: {branch_name}") from error
+            raise GitBranchUpstreamNotConfiguredError(
+                f"Git branch has no configured upstream: {branch_name}"
+            ) from error
 
         remote_name = remote_result.stdout.strip()
         merge_ref = merge_result.stdout.strip()

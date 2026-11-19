@@ -1,3 +1,3 @@
-from .repository import GitRepository
+from .repository import GitBranchUpstreamNotConfiguredError, GitRepository
 
-__all__ = ["GitRepository"]
+__all__ = ["GitBranchUpstreamNotConfiguredError", "GitRepository"]

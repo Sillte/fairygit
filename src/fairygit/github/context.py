@@ -3,7 +3,7 @@ from urllib.parse import urlsplit, urlunsplit
 from fairygit.git import GitRepository
 from fairygit.github.clients import GitHubGraphQLClient, GitHubRestClient
 from fairygit.github.clients.credentials import GitHubCredentialProvider
-from fairygit.github.models import GitHubAuthInfo, GitHubRepository
+from fairygit.github.models import GitHubAuthInfo, GitHubRepository, RequestedPullRequestPage
 
 
 class GitHubContext:
@@ -34,6 +34,25 @@ class GitHubContext:
         github_repository = GitHubRepository.from_git_repository(repository, remote_name)
         github_repository._bind(self, self._rest_client, self._graphql_client)
         return github_repository
+
+    def list_pull_requests_requested_for_user(
+        self,
+        login: str,
+        max_items: int = 100,
+        repository_full_name: str | None = None,
+    ) -> RequestedPullRequestPage:
+        """List open pull requests requesting review from ``login``.
+
+        When ``repository_full_name`` is provided, limit the search to that
+        repository. Search results are bounded by ``max_items``.
+        """
+        from fairygit.github.resources.pull_request import PullRequestSearch
+
+        return PullRequestSearch(self._rest_client).requested_for(
+            login,
+            max_items=max_items,
+            repository_full_name=repository_full_name,
+        )
 
     def get_authenticated_user(self) -> GitHubAuthInfo:
         """Verify the configured credential and return its GitHub account and API information."""

@@ -64,7 +64,7 @@ def test_auth_status_reports_missing_credential_without_network_request(monkeypa
     }
 
 
-def _pull_request(number: int) -> dict[str, object]:
+def _pull_request(number: int, head_branch: str = "feature/cli") -> dict[str, object]:
     return {
         "number": number,
         "title": f"Pull request {number}",
@@ -73,14 +73,35 @@ def _pull_request(number: int) -> dict[str, object]:
         "body": "Description",
         "draft": False,
         "head": {
-            "ref": "feature/cli",
+            "ref": head_branch,
             "repo": {"full_name": "contributor/widgets"},
         },
         "base": {"ref": "main", "repo": {"full_name": "acme/widgets"}},
     }
 
 
-def _create_local_repository(path: Path) -> Path:
+def _pull_request_file(filename: str, patch: str) -> dict[str, object]:
+    return {
+        "filename": filename,
+        "status": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "changes": 2,
+        "patch": patch,
+    }
+
+
+def _requested_pull_request(number: int, owner: str, repository: str) -> dict[str, object]:
+    return {
+        "number": number,
+        "title": f"Requested review {number}",
+        "html_url": f"https://github.com/{owner}/{repository}/pull/{number}",
+        "repository_url": f"https://api.github.com/repos/{owner}/{repository}",
+        "user": {"login": "author"},
+    }
+
+
+def _create_local_repository(path: Path, configure_upstream: bool = True) -> Path:
     subprocess.run(["git", "init", str(path)], check=True, capture_output=True, text=True)
     subprocess.run(
         ["git", "-C", str(path), "remote", "add", "origin", "https://github.com/acme/widgets.git"],
@@ -94,18 +115,19 @@ def _create_local_repository(path: Path) -> Path:
         capture_output=True,
         text=True,
     )
-    subprocess.run(
-        ["git", "-C", str(path), "config", "branch.feature/cli.remote", "origin"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    subprocess.run(
-        ["git", "-C", str(path), "config", "branch.feature/cli.merge", "refs/heads/feature/cli"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    if configure_upstream:
+        subprocess.run(
+            ["git", "-C", str(path), "config", "branch.feature/cli.remote", "origin"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(path), "config", "branch.feature/cli.merge", "refs/heads/feature/cli"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
     return path
 
 
@@ -121,6 +143,56 @@ def _mock_authenticated_user(router: MockRouter) -> None:
             },
         )
     )
+
+
+@pytest.mark.parametrize("local_scope", [False, True])
+def test_pr_requested_lists_review_requests_for_authenticated_user(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    local_scope: bool,
+) -> None:
+    monkeypatch.setenv("GH_TOKEN", "test-token")
+    search_url = "https://api.github.com/search/issues"
+    with mock_httpx2(assert_all_called=True) as router:
+        _mock_authenticated_user(router)
+        route = router.get(search_url).mock(
+            return_value=httpx2.Response(
+                200,
+                json={
+                    "total_count": 1,
+                    "incomplete_results": False,
+                    "items": [_requested_pull_request(12, "acme", "widgets")],
+                },
+            )
+        )
+
+        args = ["pr", "requested", "--max-items", "1"]
+        if local_scope:
+            local_path = _create_local_repository(tmp_path / "repo")
+            args.extend(["--local", str(local_path)])
+        result = CliRunner().invoke(app, args)
+
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {
+        "success": True,
+        "result": {
+            "items": [
+                {
+                    "repository": "acme/widgets",
+                    "number": 12,
+                    "title": "Requested review 12",
+                    "author": "author",
+                    "url": "https://github.com/acme/widgets/pull/12",
+                }
+            ],
+            "total_count": 1,
+            "has_more": False,
+            "incomplete_results": False,
+        },
+    }
+    query = route.calls[0].request.url.params["q"]
+    assert "review-requested:reviewer" in query
+    assert ("repo:acme/widgets" in query) is local_scope
 
 
 @pytest.mark.parametrize("exclude_resolved", [False, True])
@@ -188,6 +260,242 @@ def test_pr_view_outputs_body_threads_and_issue_comments_as_json(
     assert json.loads(graphql_route.calls[0].request.content)["variables"]["includeComments"] == (not exclude_resolved)
 
 
+def test_pr_view_finds_unique_pull_request_when_branch_has_no_upstream(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GH_TOKEN", "test-token")
+    local_path = _create_local_repository(tmp_path / "repo", configure_upstream=False)
+    pulls_url = "https://api.github.com/repos/acme/widgets/pulls"
+    graphql_url = "https://api.github.com/graphql"
+    with mock_httpx2(assert_all_called=True) as router:
+        _mock_authenticated_user(router)
+        pulls_route = router.get(pulls_url).mock(return_value=httpx2.Response(200, json=[_pull_request(12)]))
+        router.post(graphql_url).mock(
+            side_effect=[
+                httpx2.Response(
+                    200,
+                    json={
+                        "data": {
+                            "repository": {
+                                "pullRequest": {
+                                    "reviewThreads": {
+                                        "nodes": [],
+                                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                    }
+                                }
+                            }
+                        }
+                    },
+                ),
+                httpx2.Response(
+                    200,
+                    json={
+                        "data": {
+                            "repository": {
+                                "pullRequest": {
+                                    "comments": {
+                                        "nodes": [],
+                                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                    }
+                                }
+                            }
+                        }
+                    },
+                ),
+            ]
+        )
+
+        result = CliRunner().invoke(app, ["pr", "view", "--local", str(local_path)])
+
+    assert result.exit_code == 0
+    assert json.loads(result.output)["result"]["body"] == "Description"
+    assert "head" not in pulls_route.calls[0].request.url.params
+
+
+def test_pr_view_requires_explicit_number_when_branch_name_matches_multiple_pull_requests(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GH_TOKEN", "test-token")
+    local_path = _create_local_repository(tmp_path / "repo", configure_upstream=False)
+    pulls_url = "https://api.github.com/repos/acme/widgets/pulls"
+    with mock_httpx2(assert_all_called=True) as router:
+        _mock_authenticated_user(router)
+        router.get(pulls_url).mock(
+            return_value=httpx2.Response(200, json=[_pull_request(12), _pull_request(13)])
+        )
+
+        result = CliRunner().invoke(app, ["pr", "view", "--local", str(local_path)])
+
+    assert result.exit_code == 1
+    assert json.loads(result.output) == {
+        "success": False,
+        "error": {
+            "code": "multiple_pull_requests",
+            "message": "Multiple pull requests match local branch 'feature/cli'; specify --pr NUMBER.",
+        },
+    }
+
+
+def test_pr_view_requires_explicit_number_when_upstream_search_is_truncated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GH_TOKEN", "test-token")
+    local_path = _create_local_repository(tmp_path / "repo", configure_upstream=False)
+    pulls_url = "https://api.github.com/repos/acme/widgets/pulls"
+    with mock_httpx2(assert_all_called=True) as router:
+        _mock_authenticated_user(router)
+        router.get(pulls_url).mock(
+            return_value=httpx2.Response(
+                200,
+                json=[_pull_request(12)] + [_pull_request(number, f"feature/{number}") for number in range(13, 112)],
+                headers={"Link": f'<{pulls_url}?page=2>; rel="next"'},
+            )
+        )
+
+        result = CliRunner().invoke(app, ["pr", "view", "--local", str(local_path)])
+
+    assert result.exit_code == 1
+    assert json.loads(result.output) == {
+        "success": False,
+        "error": {
+            "code": "pull_request_search_incomplete",
+            "message": "The pull request search reached its 100-item limit; specify --pr NUMBER.",
+        },
+    }
+
+
+def test_pr_view_selects_explicit_pull_request_without_upstream(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GH_TOKEN", "test-token")
+    local_path = _create_local_repository(tmp_path / "repo", configure_upstream=False)
+    pull_url = "https://api.github.com/repos/acme/widgets/pulls/12"
+    graphql_url = "https://api.github.com/graphql"
+    with mock_httpx2(assert_all_called=True) as router:
+        _mock_authenticated_user(router)
+        pull_route = router.get(pull_url).mock(return_value=httpx2.Response(200, json=_pull_request(12)))
+        router.post(graphql_url).mock(
+            side_effect=[
+                httpx2.Response(
+                    200,
+                    json={
+                        "data": {
+                            "repository": {
+                                "pullRequest": {
+                                    "reviewThreads": {
+                                        "nodes": [],
+                                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                    }
+                                }
+                            }
+                        }
+                    },
+                ),
+                httpx2.Response(
+                    200,
+                    json={
+                        "data": {
+                            "repository": {
+                                "pullRequest": {
+                                    "comments": {
+                                        "nodes": [],
+                                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                    }
+                                }
+                            }
+                        }
+                    },
+                ),
+            ]
+        )
+
+        result = CliRunner().invoke(app, ["pr", "view", "--local", str(local_path), "--pr", "12"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.output)["result"]["body"] == "Description"
+    assert len(pull_route.calls) == 1
+
+
+def test_pr_files_returns_bounded_file_metadata_without_patches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GH_TOKEN", "test-token")
+    local_path = _create_local_repository(tmp_path / "repo")
+    pulls_url = "https://api.github.com/repos/acme/widgets/pulls"
+    files_url = "https://api.github.com/repos/acme/widgets/pulls/12/files"
+    with mock_httpx2(assert_all_called=True) as router:
+        _mock_authenticated_user(router)
+        router.get(pulls_url).mock(return_value=httpx2.Response(200, json=[_pull_request(12)]))
+        router.get(files_url).mock(
+            return_value=httpx2.Response(
+                200,
+                json=[_pull_request_file("src/example.py", "@@ -1 +1 @@\n-old\n+new")],
+            )
+        )
+
+        result = CliRunner().invoke(app, ["pr", "files", "--local", str(local_path), "--max-files", "1"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {
+        "success": True,
+        "result": {
+            "items": [
+                {
+                    "filename": "src/example.py",
+                    "status": "modified",
+                    "additions": 1,
+                    "deletions": 1,
+                    "changes": 2,
+                    "previous_filename": None,
+                }
+            ],
+            "has_more": False,
+        },
+    }
+
+
+def test_pr_diff_returns_the_selected_file_patch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GH_TOKEN", "test-token")
+    local_path = _create_local_repository(tmp_path / "repo")
+    pulls_url = "https://api.github.com/repos/acme/widgets/pulls"
+    files_url = "https://api.github.com/repos/acme/widgets/pulls/12/files"
+    patch = "@@ -1 +1 @@\n-old\n+new"
+    with mock_httpx2(assert_all_called=True) as router:
+        _mock_authenticated_user(router)
+        router.get(pulls_url).mock(return_value=httpx2.Response(200, json=[_pull_request(12)]))
+        files_route = router.get(files_url).mock(
+            return_value=httpx2.Response(200, json=[_pull_request_file("src/example.py", patch)])
+        )
+
+        result = CliRunner().invoke(
+            app,
+            ["pr", "diff", "--local", str(local_path), "--file", "src/example.py"],
+        )
+
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {
+        "success": True,
+        "result": {
+            "filename": "src/example.py",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "changes": 2,
+            "previous_filename": None,
+            "patch": patch,
+        },
+    }
+    assert files_route.calls[0].request.url.params["per_page"] == "100"
+
+
 @pytest.mark.parametrize(
     ("pull_requests", "error_code"),
     [
@@ -218,7 +526,7 @@ def test_pr_view_returns_json_error_when_pull_request_is_not_unambiguous(
             "message": (
                 "No pull request matches the current local branch."
                 if error_code == "pull_request_not_found"
-                else "Multiple pull requests match the current local branch."
+                else "Multiple pull requests match the current local branch; specify --pr NUMBER."
             ),
         },
     }

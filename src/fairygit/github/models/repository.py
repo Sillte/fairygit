@@ -48,6 +48,7 @@ class _PullRequestResponse(BaseModel):
 
 
 _pull_request_responses = TypeAdapter(list[_PullRequestResponse])
+_pull_request_response = TypeAdapter(_PullRequestResponse)
 
 
 class _PullRequestOperations:
@@ -80,6 +81,24 @@ class _PullRequestOperations:
             context=self._context,
             graphql_client=self._graphql_client,
         )
+
+    def get(self, number: int) -> GitHubPullRequest:
+        """Get a pull request by number within this repository."""
+        if number < 1:
+            raise ValueError("number must be a positive integer")
+        path = (
+            f"/repos/{quote(self._repository.owner, safe='')}/"
+            f"{quote(self._repository.name, safe='')}/pulls/{number}"
+        )
+        pull_request = _pull_request_response.validate_python(self._client.get(path).json()).to_model()
+        pull_request._bind_context(
+            self._context,
+            self._client,
+            self._graphql_client,
+            self._repository.owner,
+            self._repository.name,
+        )
+        return pull_request
 
     def for_current_branch(
         self,
@@ -196,6 +215,7 @@ class GitHubRepository(BaseModel):
             for pull_request in page_models:
                 pull_request._bind_context(
                     context,
+                    client,
                     graphql_client,
                     self.owner,
                     self.name,

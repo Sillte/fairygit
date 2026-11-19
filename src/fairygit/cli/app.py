@@ -8,8 +8,8 @@ import click
 import httpx2
 from pydantic import ValidationError
 
-from fairygit.git import GitRepository
-from fairygit.github import GitHubContext, GitHubPullRequest
+from fairygit.git import GitBranchUpstreamNotConfiguredError, GitRepository
+from fairygit.github import GitHubAuthInfo, GitHubContext, GitHubPullRequest
 from fairygit.github.clients import GitHubGraphQLClient, GitHubRestClient
 
 _Result = TypeVar("_Result")
@@ -55,17 +55,49 @@ def _read_body(body: str) -> str:
     return sys.stdin.read() if body == "-" else body
 
 
-def _current_pull_request(context: GitHubContext, local_repository: GitRepository) -> GitHubPullRequest:
+def _current_pull_request(
+    context: GitHubContext,
+    local_repository: GitRepository,
+    pull_request_number: int | None = None,
+) -> GitHubPullRequest:
     repository = context.from_git_repository(local_repository)
-    pull_requests = repository.pull_requests.for_current_branch(local_repository, max_items=2)
+    if pull_request_number is not None:
+        return repository.pull_requests.get(pull_request_number)
+
+    branch_name = local_repository.current_branch_name
+    try:
+        pull_requests = repository.pull_requests.for_current_branch(local_repository, max_items=2)
+    except GitBranchUpstreamNotConfiguredError:
+        pull_requests = repository.pull_requests.list(max_items=100)
+        matches = [pull_request for pull_request in pull_requests.items if pull_request.head_branch == branch_name]
+        if len(matches) > 1:
+            raise _CliError(
+                "multiple_pull_requests",
+                f"Multiple pull requests match local branch {branch_name!r}; specify --pr NUMBER.",
+            )
+        if pull_requests.has_more:
+            raise _CliError(
+                "pull_request_search_incomplete",
+                "The pull request search reached its 100-item limit; specify --pr NUMBER.",
+            )
+        if not matches:
+            raise _CliError(
+                "pull_request_not_found",
+                f"No open pull request matches local branch {branch_name!r}.",
+            )
+        return matches[0]
+
     if not pull_requests.items:
         raise _CliError("pull_request_not_found", "No pull request matches the current local branch.")
     if len(pull_requests.items) != 1 or pull_requests.has_more:
-        raise _CliError("multiple_pull_requests", "Multiple pull requests match the current local branch.")
+        raise _CliError(
+            "multiple_pull_requests",
+            "Multiple pull requests match the current local branch; specify --pr NUMBER.",
+        )
     return pull_requests.items[0]
 
 
-def _verify_api_endpoints(context: GitHubContext) -> None:
+def _verify_api_endpoints(context: GitHubContext) -> GitHubAuthInfo:
     auth_info = context.get_authenticated_user()
     expected_endpoints = (
         GitHubRestClient.API_BASE_URL,
@@ -79,6 +111,7 @@ def _verify_api_endpoints(context: GitHubContext) -> None:
             f"reported REST={auth_info.rest_api_url}, GraphQL={auth_info.graphql_api_url}; "
             f"configured REST={expected_endpoints[0]}, GraphQL={expected_endpoints[1]}.",
         )
+    return auth_info
 
 
 def _run_operation(operation: Callable[[], _Result]) -> _Result:
@@ -99,15 +132,16 @@ def pr() -> None:
 
 @pr.command()
 @click.option("--local", required=True, help="Path to a local Git repository")
+@click.option("--pr", "pull_request_number", type=click.IntRange(min=1), help="Select a pull request by number")
 @click.option("--exclude-resolved", is_flag=True, help="Omit resolved review threads")
-def view(local: str, exclude_resolved: bool) -> None:
+def view(local: str, pull_request_number: int | None, exclude_resolved: bool) -> None:
     """Return the current branch's pull request body, review threads, and issue comments."""
 
     def operation() -> dict[str, object]:
         local_repository = GitRepository.from_path(Path(local))
         with GitHubContext() as context:
             _verify_api_endpoints(context)
-            pull_request = _current_pull_request(context, local_repository)
+            pull_request = _current_pull_request(context, local_repository, pull_request_number)
             return {
                 "body": pull_request.body,
                 "threads": pull_request.threads.list(
@@ -120,6 +154,85 @@ def view(local: str, exclude_resolved: bool) -> None:
     _emit_json({"success": True, "result": _run_operation(operation)})
 
 
+@pr.command()
+@click.option("--local", help="Limit results to the repository configured for this local Git repository")
+@click.option(
+    "--max-items",
+    default=100,
+    type=click.IntRange(min=1, max=1000),
+    show_default=True,
+    help="Maximum number of pull requests to return",
+)
+def requested(local: str | None, max_items: int) -> None:
+    """List open pull requests requesting review from the authenticated user."""
+
+    def operation() -> dict[str, object]:
+        local_repository = GitRepository.from_path(Path(local)) if local is not None else None
+        with GitHubContext() as context:
+            auth_info = _verify_api_endpoints(context)
+            repository_full_name = None
+            if local_repository is not None:
+                repository_full_name = context.from_git_repository(local_repository).full_name
+            return context.list_pull_requests_requested_for_user(
+                auth_info.login,
+                max_items=max_items,
+                repository_full_name=repository_full_name,
+            ).model_dump(mode="json")
+
+    _emit_json({"success": True, "result": _run_operation(operation)})
+
+
+@pr.command()
+@click.option("--local", required=True, help="Path to a local Git repository")
+@click.option("--pr", "pull_request_number", type=click.IntRange(min=1), help="Select a pull request by number")
+@click.option(
+    "--max-files",
+    default=100,
+    type=click.IntRange(min=1, max=1000),
+    show_default=True,
+    help="Maximum number of changed files to return",
+)
+def files(local: str, pull_request_number: int | None, max_files: int) -> None:
+    """Return changed-file metadata for the current branch's pull request."""
+
+    def operation() -> dict[str, object]:
+        local_repository = GitRepository.from_path(Path(local))
+        with GitHubContext() as context:
+            _verify_api_endpoints(context)
+            pull_request = _current_pull_request(context, local_repository, pull_request_number)
+            page = pull_request.files.list(max_items=max_files)
+            return {
+                "items": [file.model_dump(mode="json", exclude={"patch"}) for file in page.items],
+                "has_more": page.has_more,
+            }
+
+    _emit_json({"success": True, "result": _run_operation(operation)})
+
+
+@pr.command()
+@click.option("--local", required=True, help="Path to a local Git repository")
+@click.option("--pr", "pull_request_number", type=click.IntRange(min=1), help="Select a pull request by number")
+@click.option("--file", "filename", required=True, help="Path of the changed file")
+@click.option(
+    "--max-files",
+    default=1000,
+    type=click.IntRange(min=1, max=1000),
+    show_default=True,
+    help="Maximum number of changed files to search",
+)
+def diff(local: str, pull_request_number: int | None, filename: str, max_files: int) -> None:
+    """Return the diff for one changed file in the current branch's pull request."""
+
+    def operation() -> dict[str, object]:
+        local_repository = GitRepository.from_path(Path(local))
+        with GitHubContext() as context:
+            _verify_api_endpoints(context)
+            pull_request = _current_pull_request(context, local_repository, pull_request_number)
+            return pull_request.files.diff(filename, max_items=max_files).model_dump(mode="json")
+
+    _emit_json({"success": True, "result": _run_operation(operation)})
+
+
 @pr.group()
 def thread() -> None:
     """Create and edit review thread replies."""
@@ -127,16 +240,17 @@ def thread() -> None:
 
 @thread.command()
 @click.option("--local", required=True, help="Path to a local Git repository")
+@click.option("--pr", "pull_request_number", type=click.IntRange(min=1), help="Select a pull request by number")
 @click.option("--thread-id", required=True, help="GitHub node ID of the review thread")
 @click.option("--body", required=True, help="Reply text, or '-' to read from stdin")
-def reply(local: str, thread_id: str, body: str) -> None:
+def reply(local: str, pull_request_number: int | None, thread_id: str, body: str) -> None:
     """Create a reply in the current user's pending review."""
 
     def operation() -> dict[str, object]:
         local_repository = GitRepository.from_path(Path(local))
         with GitHubContext() as context:
             _verify_api_endpoints(context)
-            pull_request = _current_pull_request(context, local_repository)
+            pull_request = _current_pull_request(context, local_repository, pull_request_number)
             reply_comment = pull_request.threads.reply(thread_id, _read_body(body))
             return reply_comment.model_dump(mode="json")
 
@@ -145,16 +259,17 @@ def reply(local: str, thread_id: str, body: str) -> None:
 
 @thread.command()
 @click.option("--local", required=True, help="Path to a local Git repository")
+@click.option("--pr", "pull_request_number", type=click.IntRange(min=1), help="Select a pull request by number")
 @click.option("--comment-id", required=True, help="GitHub node ID of your pending reply")
 @click.option("--body", required=True, help="Updated reply text, or '-' to read from stdin")
-def edit(local: str, comment_id: str, body: str) -> None:
+def edit(local: str, pull_request_number: int | None, comment_id: str, body: str) -> None:
     """Edit your reply while its review is pending."""
 
     def operation() -> dict[str, object]:
         local_repository = GitRepository.from_path(Path(local))
         with GitHubContext() as context:
             _verify_api_endpoints(context)
-            pull_request = _current_pull_request(context, local_repository)
+            pull_request = _current_pull_request(context, local_repository, pull_request_number)
             updated_comment = pull_request.threads.edit_reply(comment_id, _read_body(body))
             return updated_comment.model_dump(mode="json")
 

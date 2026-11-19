@@ -1,3 +1,3 @@
-from .models import GitRepository
+from .models import GitBranchUpstreamNotConfiguredError, GitRepository
 
-__all__ = ["GitRepository"]
+__all__ = ["GitBranchUpstreamNotConfiguredError", "GitRepository"]

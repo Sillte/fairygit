@@ -7,7 +7,15 @@ from .comments import (
     GitHubReviewThread,
     GitHubReviewThreadPage,
 )
-from .pull_request import GitHubPullRequest, PullRequest, PullRequestPage
+from .pull_request import (
+    GitHubPullRequest,
+    PullRequest,
+    PullRequestFile,
+    PullRequestFilePage,
+    PullRequestPage,
+    RequestedPullRequest,
+    RequestedPullRequestPage,
+)
 from .repository import GitHubRepository
 
 __all__ = [
@@ -21,5 +29,9 @@ __all__ = [
     "GitHubReviewThread",
     "GitHubReviewThreadPage",
     "PullRequest",
+    "PullRequestFile",
+    "PullRequestFilePage",
     "PullRequestPage",
+    "RequestedPullRequest",
+    "RequestedPullRequestPage",
 ]

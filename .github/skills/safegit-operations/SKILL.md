@@ -1,13 +1,13 @@
 ---
 name: safegit-operations
-description: "Inspect the pull request for a local Git branch and prepare or edit review-thread replies in a pending review. Use when asked to review PR context, draft a thread reply, or update your own pending reply. Never submit or publish a review."
+description: "Inspect the pull request for a local Git branch, retrieve changed files and diffs, and prepare or edit review-thread replies in a pending review. Use when asked to review PR context, inspect PR changes, draft a thread reply, or update your own pending reply. Never submit or publish a review."
 ---
 
 # Safe Git Operations
 
-At this stage, this skill covers pull-request inspection and drafting or editing pending review replies.
+At this stage, this skill covers pull-request inspection, changed-file and diff retrieval, and drafting or editing pending review replies.
 
-Use the `fairygit` CLI to inspect the pull request associated with a local repository and, when explicitly requested, create or edit a reply that remains in a pending review.
+Use the `fairygit` CLI to inspect a pull request associated with a local repository and, when explicitly requested, create or edit a reply that remains in a pending review.
 
 ## Setup checks
 
@@ -18,13 +18,16 @@ Use the `fairygit` CLI to inspect the pull request associated with a local repos
 
 These are independent operations, not a mandatory sequence. Choose only the operation needed for the user's request; inspect the PR before drafting or changing a reply.
 
-- Inspect the matching PR with `uvx fairygit pr view --local PATH`, where `PATH` is the local repository directory. If the PR has a very large number of review comments, retry with `--exclude-resolved` to omit resolved review threads and avoid fetching their comments:
+- Inspect the matching PR with `uvx fairygit pr view --local PATH`, where `PATH` is the local repository directory. If the current branch has no upstream, the CLI searches open PRs by local branch name and proceeds only if there is exactly one match and the search is complete. If matching is ambiguous or the search is truncated, specify the intended PR with `--pr NUMBER`. This option is also available for file, diff, and thread commands. If the PR has a very large number of review comments, retry with `--exclude-resolved` to omit resolved review threads and avoid fetching their comments:
 
    ```console
    uvx fairygit pr view --local PATH --exclude-resolved
    ```
 
   This filters review threads only; published conversation comments are unchanged. If the filtered result still contains around 500 review comments, treat the PR as unusually large and surface that rather than assuming the output is a routine review.
+- List changed files with `uvx fairygit pr files --local PATH [--max-files N]`. The result contains file metadata in `result.items`; `result.has_more` indicates omitted files. Patches are not included in this result.
+- Retrieve one file's patch with `uvx fairygit pr diff --local PATH --file FILEPATH [--max-files N]`. Use the exact current path from the changed-file list. A `null` patch means GitHub did not provide a textual patch for that file; do not claim the diff is empty.
+- List open PRs requesting review from the authenticated user with `uvx fairygit pr requested [--local PATH] [--max-items N]`. Without `--local`, the search spans accessible repositories. With it, results are limited to the repository configured by that local repository's `origin`. Treat `result.has_more` and `result.incomplete_results` as truncation or completeness warnings.
 - Parse stdout as JSON. Continue only when `success` is `true`. If it is `false`, report the `error` and stop.
 - Use `result.body` for the PR description, `result.threads.items` for review threads and their diff comments, and `result.issue_comments.items` for published conversation comments. With `--exclude-resolved`, `threads.has_more` applies to unresolved threads only. Treat `threads.has_more`, each thread's `comments_has_more`, and `issue_comments.has_more` as truncation indicators; do not claim the returned results are complete when any is `true`.
 - When asked to prepare a new thread reply, pass the selected thread's `id`:

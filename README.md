@@ -236,8 +236,12 @@ with GitHubContext() as context:
     conversation_comments = pull_request.issue_comments.list(max_items=100)
 ```
 
+Use `repository.pull_requests.get(number)` to retrieve a pull request directly when local branch matching is unavailable.
+
 Thread retrieval is bounded by both the number of threads and comments per thread. Issue comments are bounded separately; each result reports whether additional items were omitted.
 Review-thread comments include the containing review's `review_state` and derived `is_pending` status. Issue-style conversation comments are already published comments and are not part of a pending review.
+
+Changed-file metadata is available through `pull_request.files.list(max_items=100)`, which reports whether more files are available. Retrieve one file's patch with `pull_request.files.diff("src/example.py")`; GitHub may omit patches for some files.
 
 Replies can be added to a pending review, and your own reply can be edited while that review remains pending:
 
@@ -255,17 +259,30 @@ If you do not already have a pending review on the pull request, `reply()` creat
 
 PR commands verify the authenticated API address against the REST and GraphQL client endpoints before making PR requests. A mismatch returns an error instead of calling an unexpected API host.
 
-`fairygit pr view --local PATH` finds the pull request matching the current branch's configured upstream and returns its body, review threads, and issue-style conversation comments as JSON. Add `--exclude-resolved` to omit resolved review threads; their comments are not fetched. Set `GH_TOKEN` or `GITHUB_PAT` to authenticate.
+`fairygit pr view --local PATH` finds the pull request matching the current branch's configured upstream and returns its body, review threads, and issue-style conversation comments as JSON. If the branch has no configured upstream, it searches up to 100 open pull requests by local branch name and continues only when the result is unique and the search is complete. Use `--pr NUMBER` to select a pull request explicitly; this bypasses branch matching. These options are also available for `pr files`, `pr diff`, and `pr thread reply/edit`. Add `--exclude-resolved` to omit resolved review threads; their comments are not fetched. Set `GH_TOKEN` or `GITHUB_PAT` to authenticate.
 
-The command requires exactly one matching pull request. It returns a JSON error and a non-zero exit status if no pull request matches or the branch matches multiple pull requests. Thread and issue-comment results are bounded to 100 items and include `has_more` when additional results are available. When resolved threads are excluded, the thread limit applies to unresolved threads.
+`fairygit pr files --local PATH` returns changed-file metadata for the matching pull request without patches. Use `--max-files` to set the result limit (default 100, maximum 1000); the response includes `has_more` when additional files are available. `fairygit pr diff --local PATH --file FILEPATH` returns the metadata and patch for one changed file. Its `--max-files` option bounds the search (default and maximum 1000). The patch is `null` when GitHub does not provide one, such as for some binary or large files.
+
+`fairygit pr requested [--local PATH]` lists open pull requests requesting review from the authenticated user across accessible repositories. Use `--local PATH` to limit the search to the repository configured by that local repository's `origin` remote. `--max-items` bounds the result (default 100, maximum 1000); the JSON includes `total_count`, `has_more`, and `incomplete_results`.
+
+The command requires exactly one matching pull request. It returns a JSON error and a non-zero exit status if no pull request matches, multiple pull requests match, or an upstream-free search is truncated. In those cases, specify `--pr NUMBER` when the intended pull request is known. Thread and issue-comment results are bounded to 100 items and include `has_more` when additional results are available. When resolved threads are excluded, the thread limit applies to unresolved threads.
 
 The [safegit-operations Skill](./.github/skills/safegit-operations/SKILL.md) describes how an Agent can use these commands to inspect a PR and prepare pending thread replies.
+
+Changed files and diffs can be retrieved with:
+
+```console
+fairygit pr files --local PATH --max-files 100
+fairygit pr diff --local PATH --file src/example.py
+fairygit pr requested --max-items 100
+fairygit pr view --local PATH --pr 123
+```
 
 Pending review replies can be created or edited with:
 
 ```console
-fairygit pr thread reply --local PATH --thread-id THREAD_ID --body "Reply text"
-fairygit pr thread edit --local PATH --comment-id COMMENT_ID --body "Updated reply text"
+fairygit pr thread reply --local PATH --pr 123 --thread-id THREAD_ID --body "Reply text"
+fairygit pr thread edit --local PATH --pr 123 --comment-id COMMENT_ID --body "Updated reply text"
 ```
 
 Use `--body -` to read the body from standard input, which is useful for multiline text. The reply command adds the reply to your existing pending review or creates one if needed. The edit command accepts a review comment ID and succeeds only for your own reply in a pending review belonging to the PR matched by `--local`. Both commands return the resulting comment as JSON; neither submits the review.

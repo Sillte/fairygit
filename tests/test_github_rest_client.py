@@ -26,6 +26,27 @@ def _pull_request(number: int) -> dict[str, object]:
     }
 
 
+def _pull_request_file(filename: str, patch: str | None = "@@ -1 +1 @@\n-old\n+new") -> dict[str, object]:
+    return {
+        "filename": filename,
+        "status": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "changes": 2,
+        "patch": patch,
+    }
+
+
+def _requested_pull_request(number: int, owner: str, repository: str) -> dict[str, object]:
+    return {
+        "number": number,
+        "title": f"Requested review {number}",
+        "html_url": f"https://github.com/{owner}/{repository}/pull/{number}",
+        "repository_url": f"https://api.github.com/repos/{owner}/{repository}",
+        "user": {"login": "author"},
+    }
+
+
 def _comment(comment_id: str) -> dict[str, object]:
     return {
         "id": comment_id,
@@ -79,6 +100,59 @@ def test_repository_lists_pull_requests_through_shared_context() -> None:
     }
 
 
+def test_repository_gets_pull_request_by_number() -> None:
+    route_url = "https://api.github.com/repos/acme/widgets/pulls/12"
+    with mock_httpx2(assert_all_called=True) as router:
+        route = router.get(route_url).mock(return_value=httpx.Response(200, json=_pull_request(12)))
+        with GitHubContext(token="test-token") as context:
+            pull_request = context.get_repository("acme", "widgets").pull_requests.get(12)
+
+    assert pull_request.number == 12
+    assert pull_request._context is context
+    assert route.calls[0].request.url.path == "/repos/acme/widgets/pulls/12"
+
+
+def test_context_lists_requested_pull_requests_and_paginates() -> None:
+    search_url = "https://api.github.com/search/issues"
+    with mock_httpx2(assert_all_called=True) as router:
+        route = router.get(search_url).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json={
+                        "total_count": 2,
+                        "incomplete_results": False,
+                        "items": [_requested_pull_request(12, "acme", "widgets")],
+                    },
+                    headers={"Link": f'<{search_url}?page=2>; rel="next"'},
+                ),
+                httpx.Response(
+                    200,
+                    json={
+                        "total_count": 2,
+                        "incomplete_results": True,
+                        "items": [_requested_pull_request(23, "contoso", "tools")],
+                    },
+                ),
+            ]
+        )
+        with GitHubContext(token="test-token") as context:
+            result = context.list_pull_requests_requested_for_user("reviewer", max_items=2)
+
+    assert result.items[0].repository == "acme/widgets"
+    assert result.items[0].author == "author"
+    assert result.items[1].number == 23
+    assert result.total_count == 2
+    assert result.has_more is False
+    assert result.incomplete_results is True
+    assert [call.request.url.params["page"] for call in route.calls] == ["1", "2"]
+    assert [call.request.url.params["per_page"] for call in route.calls] == ["2", "2"]
+    assert all(
+        call.request.url.params["q"] == "is:pr is:open review-requested:reviewer"
+        for call in route.calls
+    )
+
+
 def test_repository_pull_requests_follow_pages_up_to_limit() -> None:
     route_url = "https://api.github.com/repos/acme/widgets/pulls"
     with mock_httpx2(assert_all_called=True) as router:
@@ -115,6 +189,90 @@ def test_repository_pull_requests_report_more_when_limit_is_reached() -> None:
 
     assert len(result.items) == 1
     assert result.has_more is True
+
+
+def test_pull_request_lists_changed_files_and_paginates_to_limit() -> None:
+    pull_requests_url = "https://api.github.com/repos/acme/widgets/pulls"
+    files_url = "https://api.github.com/repos/acme/widgets/pulls/12/files"
+    with mock_httpx2(assert_all_called=True) as router:
+        router.get(pull_requests_url).mock(return_value=httpx.Response(200, json=[_pull_request(12)]))
+        files_route = router.get(files_url).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json=[_pull_request_file("src/one.py")],
+                    headers={"Link": f'<{files_url}?page=2>; rel="next"'},
+                ),
+                httpx.Response(200, json=[_pull_request_file("src/two.py", patch=None)]),
+            ]
+        )
+        with GitHubContext(token="test-token") as context:
+            pull_request = context.get_repository("acme", "widgets").pull_requests.list().items[0]
+            result = pull_request.files.list(max_items=2)
+
+    assert [item.filename for item in result.items] == ["src/one.py", "src/two.py"]
+    assert result.items[0].patch == "@@ -1 +1 @@\n-old\n+new"
+    assert result.items[1].patch is None
+    assert result.has_more is False
+    assert [call.request.url.params["page"] for call in files_route.calls] == ["1", "2"]
+
+
+def test_pull_request_file_diff_returns_matching_file() -> None:
+    pull_requests_url = "https://api.github.com/repos/acme/widgets/pulls"
+    files_url = "https://api.github.com/repos/acme/widgets/pulls/12/files"
+    patch = "@@ -1 +1 @@\n-before\n+after"
+    with mock_httpx2(assert_all_called=True) as router:
+        router.get(pull_requests_url).mock(return_value=httpx.Response(200, json=[_pull_request(12)]))
+        router.get(files_url).mock(return_value=httpx.Response(200, json=[_pull_request_file("src/example.py", patch)]))
+        with GitHubContext(token="test-token") as context:
+            pull_request = context.get_repository("acme", "widgets").pull_requests.list().items[0]
+            result = pull_request.files.diff("src/example.py")
+
+    assert result.filename == "src/example.py"
+    assert result.patch == patch
+
+
+def test_pull_request_file_diff_searches_later_pages() -> None:
+    pull_requests_url = "https://api.github.com/repos/acme/widgets/pulls"
+    files_url = "https://api.github.com/repos/acme/widgets/pulls/12/files"
+    patch = "@@ -1 +1 @@\n-before\n+after"
+    with mock_httpx2(assert_all_called=True) as router:
+        router.get(pull_requests_url).mock(return_value=httpx.Response(200, json=[_pull_request(12)]))
+        files_route = router.get(files_url).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json=[_pull_request_file("src/first.py")],
+                    headers={"Link": f'<{files_url}?page=2>; rel="next"'},
+                ),
+                httpx.Response(200, json=[_pull_request_file("src/target.py", patch)]),
+            ]
+        )
+        with GitHubContext(token="test-token") as context:
+            pull_request = context.get_repository("acme", "widgets").pull_requests.list().items[0]
+            result = pull_request.files.diff("src/target.py", max_items=2)
+
+    assert result.patch == patch
+    assert [call.request.url.params["page"] for call in files_route.calls] == ["1", "2"]
+
+
+def test_pull_request_file_diff_reports_missing_file_after_truncated_search() -> None:
+    pull_requests_url = "https://api.github.com/repos/acme/widgets/pulls"
+    files_url = "https://api.github.com/repos/acme/widgets/pulls/12/files"
+    with mock_httpx2(assert_all_called=True) as router:
+        router.get(pull_requests_url).mock(return_value=httpx.Response(200, json=[_pull_request(12)]))
+        router.get(files_url).mock(
+            return_value=httpx.Response(
+                200,
+                json=[_pull_request_file("src/one.py"), _pull_request_file("src/two.py")],
+                headers={"Link": f'<{files_url}?page=2>; rel="next"'},
+            )
+        )
+        with GitHubContext(token="test-token") as context:
+            pull_request = context.get_repository("acme", "widgets").pull_requests.list().items[0]
+
+            with pytest.raises(ValueError, match="increase max_items to search further"):
+                pull_request.files.diff("src/later.py", max_items=1)
 
 
 def test_pull_request_lists_review_threads_and_paginates_thread_comments() -> None:

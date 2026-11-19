@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Literal
+from urllib.parse import quote, unquote, urlsplit
 
 from pydantic import BaseModel, TypeAdapter
 
@@ -12,9 +14,15 @@ from fairygit.github.models.comments import (
     GitHubReviewThread,
     GitHubReviewThreadPage,
 )
+from fairygit.github.models.pull_request import (
+    PullRequestFile,
+    PullRequestFilePage,
+    RequestedPullRequest,
+    RequestedPullRequestPage,
+)
 
 if TYPE_CHECKING:
-    from fairygit.github.clients import GitHubGraphQLClient
+    from fairygit.github.clients import GitHubGraphQLClient, GitHubRestClient
     from fairygit.github.models.pull_request import GitHubPullRequest
 
 
@@ -372,6 +380,61 @@ class _PendingReplyData(BaseModel):
     node: _EditableComment | None
 
 
+class _PullRequestFileResponse(BaseModel):
+    filename: str
+    status: Literal["added", "removed", "modified", "renamed", "copied", "changed", "unchanged"]
+    additions: int
+    deletions: int
+    changes: int
+    previous_filename: str | None = None
+    patch: str | None = None
+
+    def to_model(self) -> PullRequestFile:
+        return PullRequestFile(
+            filename=self.filename,
+            status=self.status,
+            additions=self.additions,
+            deletions=self.deletions,
+            changes=self.changes,
+            previous_filename=self.previous_filename,
+            patch=self.patch,
+        )
+
+
+class _RequestedPullRequestResponse(BaseModel):
+    number: int
+    title: str
+    html_url: str
+    repository_url: str
+    user: _Author | None
+
+    def to_model(self) -> RequestedPullRequest:
+        parsed_url = urlsplit(self.repository_url)
+        parts = parsed_url.path.strip("/").split("/")
+        if (
+            parsed_url.scheme != "https"
+            or parsed_url.netloc != "api.github.com"
+            or len(parts) != 3
+            or parts[0] != "repos"
+            or not parts[1]
+            or not parts[2]
+        ):
+            raise ValueError("GitHub search result contains an invalid repository URL")
+        return RequestedPullRequest(
+            repository=f"{unquote(parts[1])}/{unquote(parts[2])}",
+            number=self.number,
+            title=self.title,
+            author=self.user.login if self.user else None,
+            url=self.html_url,
+        )
+
+
+class _RequestedPullRequestSearchResponse(BaseModel):
+    total_count: int
+    incomplete_results: bool
+    items: list[_RequestedPullRequestResponse]
+
+
 _thread_query_data = TypeAdapter(_ThreadQueryData)
 _issue_comment_query_data = TypeAdapter(_IssueCommentQueryData)
 _thread_comment_query_data = TypeAdapter(_ThreadCommentQueryData)
@@ -381,6 +444,8 @@ _create_review_data = TypeAdapter(_CreateReviewData)
 _add_reply_data = TypeAdapter(_AddReplyData)
 _pending_reply_data = TypeAdapter(_PendingReplyData)
 _update_comment_data = TypeAdapter(_UpdateCommentData)
+_pull_request_file_responses = TypeAdapter(list[_PullRequestFileResponse])
+_requested_pull_request_search_response = TypeAdapter(_RequestedPullRequestSearchResponse)
 
 
 class _PullRequestResource:
@@ -395,6 +460,125 @@ class _PullRequestResource:
     def _repository_variables(self) -> dict[str, object]:
         owner, name = self._pull_request._repository_coordinates()
         return {"owner": owner, "name": name, "number": self._pull_request.number}
+
+
+class PullRequestFiles:
+    """Fetch changed-file metadata and patches for a pull request."""
+
+    def __init__(self, pull_request: GitHubPullRequest, client: GitHubRestClient) -> None:
+        self._pull_request = pull_request
+        self._client = client
+
+    def list(self, max_items: int = 100) -> PullRequestFilePage:
+        """List changed files, following REST pages up to ``max_items``."""
+        _validate_limit(max_items, "max_items")
+        files: list[PullRequestFile] = []
+        page_number = 1
+        has_more = False
+        while len(files) < max_items:
+            remaining = max_items - len(files)
+            page_items, has_next_page = self._get_page(page_number, min(100, remaining))
+            files.extend(item.to_model() for item in page_items[:remaining])
+
+            has_more = has_next_page or len(page_items) > remaining
+            if not has_next_page or not page_items or len(files) >= max_items:
+                break
+            page_number += 1
+
+        return PullRequestFilePage(items=files, has_more=has_more)
+
+    def diff(self, filename: str, max_items: int = 1000) -> PullRequestFile:
+        """Return a file's patch, searching at most ``max_items`` changed files."""
+        if not filename:
+            raise ValueError("filename must not be empty")
+        _validate_limit(max_items, "max_items")
+        searched = 0
+        page_number = 1
+        has_more = False
+        while searched < max_items:
+            remaining = max_items - searched
+            files, has_next_page = self._get_page(page_number, min(100, remaining))
+            for file in files:
+                if file.filename == filename:
+                    return file.to_model()
+            searched += len(files)
+            has_more = has_next_page or len(files) > remaining
+            if not has_next_page or not files or searched >= max_items:
+                break
+            page_number += 1
+
+        if has_more:
+            raise ValueError(
+                f"Changed file {filename!r} was not found among the first {max_items} files; "
+                "increase max_items to search further"
+            )
+        raise ValueError(f"Changed file {filename!r} was not found in this pull request")
+
+    def _get_page(self, page: int, per_page: int) -> tuple[Sequence[_PullRequestFileResponse], bool]:
+        owner, name = self._pull_request._repository_coordinates()
+        path = (
+            f"/repos/{quote(owner, safe='')}/{quote(name, safe='')}"
+            f"/pulls/{self._pull_request.number}/files"
+        )
+        response = self._client.get(path, params={"page": page, "per_page": per_page})
+        files = _pull_request_file_responses.validate_python(response.json())
+        return files, response.links.get("next") is not None
+
+
+class PullRequestSearch:
+    """Search pull requests by requested-review status."""
+
+    def __init__(self, client: GitHubRestClient) -> None:
+        self._client = client
+
+    def requested_for(
+        self,
+        login: str,
+        max_items: int = 100,
+        repository_full_name: str | None = None,
+    ) -> RequestedPullRequestPage:
+        """List open pull requests requesting review from ``login``."""
+        _validate_limit(max_items, "max_items")
+        if not login or any(character.isspace() for character in login) or ":" in login:
+            raise ValueError("login must be a non-empty GitHub login")
+        if repository_full_name is not None:
+            repository_parts = repository_full_name.split("/")
+            if len(repository_parts) != 2 or not all(repository_parts):
+                raise ValueError("repository_full_name must be in owner/repository format")
+
+        query = f"is:pr is:open review-requested:{login}"
+        if repository_full_name is not None:
+            query += f" repo:{repository_full_name}"
+
+        page_size = min(100, max_items)
+        items: list[RequestedPullRequest] = []
+        total_count = 0
+        incomplete_results = False
+        has_more = False
+        page_number = 1
+        while len(items) < max_items:
+            remaining = max_items - len(items)
+            response = self._client.get(
+                "/search/issues",
+                params={"q": query, "page": page_number, "per_page": page_size},
+            )
+            search_result = _requested_pull_request_search_response.validate_python(response.json())
+            items.extend(result.to_model() for result in search_result.items[:remaining])
+            total_count = search_result.total_count
+            incomplete_results = incomplete_results or search_result.incomplete_results
+            has_next_page = response.links.get("next") is not None
+            seen_count = (page_number - 1) * page_size + len(search_result.items)
+            has_more = has_next_page or len(search_result.items) > remaining or total_count > seen_count
+            if not has_next_page or not search_result.items or len(items) >= max_items:
+                break
+            page_number += 1
+
+        return RequestedPullRequestPage(
+            items=items,
+            total_count=total_count,
+            has_more=has_more,
+            incomplete_results=incomplete_results,
+        )
 
 
 class PullRequestThreads(_PullRequestResource):

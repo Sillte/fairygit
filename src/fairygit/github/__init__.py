@@ -11,7 +11,11 @@ from .models import (
     GitHubReviewThread,
     GitHubReviewThreadPage,
     PullRequest,
+    PullRequestFile,
+    PullRequestFilePage,
     PullRequestPage,
+    RequestedPullRequest,
+    RequestedPullRequestPage,
 )
 
 __all__ = [
@@ -28,5 +32,9 @@ __all__ = [
     "GitHubReviewThreadPage",
     "GitHubRestClient",
     "PullRequest",
+    "PullRequestFile",
+    "PullRequestFilePage",
     "PullRequestPage",
+    "RequestedPullRequest",
+    "RequestedPullRequestPage",
 ]
