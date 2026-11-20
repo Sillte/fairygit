@@ -8,22 +8,19 @@ from .comments import (
     GitHubReviewThreadPage,
 )
 from .pull_request import (
-    GitHubPullRequest,
     PullRequest,
     PullRequestFile,
     PullRequestFilePage,
-    PullRequestPage,
     RequestedPullRequest,
     RequestedPullRequestPage,
 )
-from .repository import GitHubRepository
+from .repository import GitHubRepositoryInfo
 
 __all__ = [
     "GitHubComment",
     "GitHubAuthInfo",
     "GitHubIssueCommentPage",
-    "GitHubPullRequest",
-    "GitHubRepository",
+    "GitHubRepositoryInfo",
     "GitHubReviewComment",
     "GitHubReviewState",
     "GitHubReviewThread",
@@ -31,7 +28,6 @@ __all__ = [
     "PullRequest",
     "PullRequestFile",
     "PullRequestFilePage",
-    "PullRequestPage",
     "RequestedPullRequest",
     "RequestedPullRequestPage",
 ]

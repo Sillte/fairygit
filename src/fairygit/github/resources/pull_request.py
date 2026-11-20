@@ -6,6 +6,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 from pydantic import BaseModel, TypeAdapter
 
+from fairygit.github.handles import GitHubPullRequest
 from fairygit.github.models.comments import (
     GitHubComment,
     GitHubIssueCommentPage,
@@ -22,8 +23,7 @@ from fairygit.github.models.pull_request import (
 )
 
 if TYPE_CHECKING:
-    from fairygit.github.clients import GitHubGraphQLClient, GitHubRestClient
-    from fairygit.github.models.pull_request import GitHubPullRequest
+    from fairygit.github.context import GitHubContext
 
 
 _REVIEW_THREADS_QUERY = """
@@ -452,10 +452,10 @@ class _PullRequestResource:
     def __init__(
         self,
         pull_request: GitHubPullRequest,
-        client: GitHubGraphQLClient,
+        context: GitHubContext,
     ) -> None:
         self._pull_request = pull_request
-        self._client = client
+        self._context = context
 
     def _repository_variables(self) -> dict[str, object]:
         owner, name = self._pull_request._repository_coordinates()
@@ -465,9 +465,9 @@ class _PullRequestResource:
 class PullRequestFiles:
     """Fetch changed-file metadata and patches for a pull request."""
 
-    def __init__(self, pull_request: GitHubPullRequest, client: GitHubRestClient) -> None:
+    def __init__(self, pull_request: GitHubPullRequest, context: GitHubContext) -> None:
         self._pull_request = pull_request
-        self._client = client
+        self._context = context
 
     def list(self, max_items: int = 100) -> PullRequestFilePage:
         """List changed files, following REST pages up to ``max_items``."""
@@ -520,7 +520,7 @@ class PullRequestFiles:
             f"/repos/{quote(owner, safe='')}/{quote(name, safe='')}"
             f"/pulls/{self._pull_request.number}/files"
         )
-        response = self._client.get(path, params={"page": page, "per_page": per_page})
+        response = self._context.rest.get(path, params={"page": page, "per_page": per_page})
         files = _pull_request_file_responses.validate_python(response.json())
         return files, response.links.get("next") is not None
 
@@ -528,8 +528,8 @@ class PullRequestFiles:
 class PullRequestSearch:
     """Search pull requests by requested-review status."""
 
-    def __init__(self, client: GitHubRestClient) -> None:
-        self._client = client
+    def __init__(self, context: GitHubContext) -> None:
+        self._context = context
 
     def requested_for(
         self,
@@ -558,7 +558,7 @@ class PullRequestSearch:
         page_number = 1
         while len(items) < max_items:
             remaining = max_items - len(items)
-            response = self._client.get(
+            response = self._context.rest.get(
                 "/search/issues",
                 params={"q": query, "page": page_number, "per_page": page_size},
             )
@@ -607,7 +607,7 @@ class PullRequestThreads(_PullRequestResource):
             remaining = max_items - len(threads)
             comment_first = min(100, max_comments_per_thread)
             data = _thread_query_data.validate_python(
-                self._client.execute(
+                self._context.graphql.execute(
                     _REVIEW_THREADS_QUERY,
                     {
                         **repository_variables,
@@ -633,7 +633,7 @@ class PullRequestThreads(_PullRequestResource):
                 comment_connection = thread.comments
                 if comment_connection is None:
                     comment_data = _thread_comment_query_data.validate_python(
-                        self._client.execute(
+                        self._context.graphql.execute(
                             _THREAD_COMMENTS_QUERY,
                             {
                                 "id": thread.id,
@@ -656,7 +656,7 @@ class PullRequestThreads(_PullRequestResource):
                     raise ValueError("GitHub GraphQL response is missing the review comment cursor")
                 while comments_has_more and len(comments) < max_comments_per_thread and comments_cursor is not None:
                     comment_data = _thread_comment_query_data.validate_python(
-                        self._client.execute(
+                        self._context.graphql.execute(
                             _THREAD_COMMENTS_QUERY,
                             {
                                 "id": thread.id,
@@ -709,7 +709,7 @@ class PullRequestThreads(_PullRequestResource):
         _validate_comment_body(body)
         review_id = self._pending_review_id(thread_id)
         data = _add_reply_data.validate_python(
-            self._client.execute(
+            self._context.graphql.execute(
                 _ADD_THREAD_REPLY_MUTATION,
                 {"threadId": thread_id, "reviewId": review_id, "body": body},
             )
@@ -727,7 +727,7 @@ class PullRequestThreads(_PullRequestResource):
         _validate_comment_body(body)
         comment_id = comment.id if isinstance(comment, GitHubReviewComment) else comment
         data = _pending_reply_data.validate_python(
-            self._client.execute(
+            self._context.graphql.execute(
                 _PENDING_REPLY_QUERY,
                 {**self._repository_variables(), "commentId": comment_id},
             )
@@ -751,7 +751,7 @@ class PullRequestThreads(_PullRequestResource):
             raise ValueError("Review comment is not part of this pull request")
 
         updated_data = _update_comment_data.validate_python(
-            self._client.execute(
+            self._context.graphql.execute(
                 _UPDATE_REVIEW_COMMENT_MUTATION,
                 {"commentId": current.id, "body": body},
             )
@@ -767,7 +767,7 @@ class PullRequestThreads(_PullRequestResource):
     def _pending_review_id(self, thread_id: str) -> str:
         variables = {**self._repository_variables(), "threadId": thread_id}
         target_data = _review_target_data.validate_python(
-            self._client.execute(_PULL_REQUEST_REVIEW_TARGET_QUERY, variables)
+            self._context.graphql.execute(_PULL_REQUEST_REVIEW_TARGET_QUERY, variables)
         )
         repository = target_data.repository
         pull_request = repository.pullRequest if repository else None
@@ -780,7 +780,7 @@ class PullRequestThreads(_PullRequestResource):
             raise ValueError("Review thread does not belong to this pull request")
 
         pending_data = _node_reviews.validate_python(
-            self._client.execute(
+            self._context.graphql.execute(
                 _PENDING_REVIEWS_QUERY,
                 {"pullRequestId": pull_request.id, "author": target_data.viewer.login},
             )
@@ -790,7 +790,7 @@ class PullRequestThreads(_PullRequestResource):
             return review_connection.nodes[0].id
 
         created_data = _create_review_data.validate_python(
-            self._client.execute(
+            self._context.graphql.execute(
                 _CREATE_PENDING_REVIEW_MUTATION,
                 {"pullRequestId": pull_request.id},
             )
@@ -815,7 +815,7 @@ class PullRequestIssueComments(_PullRequestResource):
         while len(comments) < max_items:
             remaining = max_items - len(comments)
             data = _issue_comment_query_data.validate_python(
-                self._client.execute(
+                self._context.graphql.execute(
                     _ISSUE_COMMENTS_QUERY,
                     {**variables, "first": min(100, remaining), "after": cursor},
                 )

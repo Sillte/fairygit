@@ -1,11 +1,11 @@
 from .clients import GitHubGraphQLClient, GitHubRestClient
 from .context import GitHubContext
+from .handles import GitHubPullRequest, GitHubRepository, PullRequestPage
 from .models import (
     GitHubAuthInfo,
     GitHubComment,
     GitHubIssueCommentPage,
-    GitHubPullRequest,
-    GitHubRepository,
+    GitHubRepositoryInfo,
     GitHubReviewComment,
     GitHubReviewState,
     GitHubReviewThread,
@@ -13,7 +13,6 @@ from .models import (
     PullRequest,
     PullRequestFile,
     PullRequestFilePage,
-    PullRequestPage,
     RequestedPullRequest,
     RequestedPullRequestPage,
 )
@@ -26,6 +25,7 @@ __all__ = [
     "GitHubIssueCommentPage",
     "GitHubPullRequest",
     "GitHubRepository",
+    "GitHubRepositoryInfo",
     "GitHubReviewComment",
     "GitHubReviewState",
     "GitHubReviewThread",

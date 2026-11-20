@@ -1,13 +1,20 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit, urlunsplit
 
 from fairygit.git import GitRepository
 from fairygit.github.clients import GitHubGraphQLClient, GitHubRestClient
 from fairygit.github.clients.credentials import GitHubCredentialProvider
-from fairygit.github.models import GitHubAuthInfo, GitHubRepository, RequestedPullRequestPage
+from fairygit.github.handles import GitHubRepository
+from fairygit.github.models import GitHubAuthInfo, GitHubRepositoryInfo
+
+if TYPE_CHECKING:
+    from fairygit.github.resources.pull_request import PullRequestSearch
 
 
 class GitHubContext:
-    """Share GitHub authentication and API clients across repository objects."""
+    """Own authenticated API clients and create context-bound GitHub handles."""
 
     def __init__(
         self,
@@ -19,44 +26,39 @@ class GitHubContext:
         self._rest_client = GitHubRestClient(access_token, timeout=timeout)
         self._graphql_client = GitHubGraphQLClient(access_token, timeout=timeout)
 
+    @property
+    def rest(self) -> GitHubRestClient:
+        """Return the context-owned REST transport."""
+        return self._rest_client
+
+    @property
+    def graphql(self) -> GitHubGraphQLClient:
+        """Return the context-owned GraphQL transport."""
+        return self._graphql_client
+
+    @property
+    def pull_request_search(self) -> PullRequestSearch:
+        """Return operations for searching pull requests across repositories."""
+        from fairygit.github.resources.pull_request import PullRequestSearch
+
+        return PullRequestSearch(self)
+
     def get_repository(self, owner: str, name: str, remote_name: str = "origin") -> GitHubRepository:
         """Create a repository object attached to this context."""
-        repository = GitHubRepository(owner=owner, name=name, remote_name=remote_name)
-        repository._bind(self, self._rest_client, self._graphql_client)
-        return repository
+        data = GitHubRepositoryInfo(owner=owner, name=name, remote_name=remote_name)
+        return GitHubRepository(data, self)
 
     def from_git_repository(
         self,
         repository: GitRepository,
         remote_name: str = "origin",
     ) -> GitHubRepository:
-        """Resolve and attach the GitHub repository configured as a local remote."""
-        github_repository = GitHubRepository.from_git_repository(repository, remote_name)
-        github_repository._bind(self, self._rest_client, self._graphql_client)
-        return github_repository
-
-    def list_pull_requests_requested_for_user(
-        self,
-        login: str,
-        max_items: int = 100,
-        repository_full_name: str | None = None,
-    ) -> RequestedPullRequestPage:
-        """List open pull requests requesting review from ``login``.
-
-        When ``repository_full_name`` is provided, limit the search to that
-        repository. Search results are bounded by ``max_items``.
-        """
-        from fairygit.github.resources.pull_request import PullRequestSearch
-
-        return PullRequestSearch(self._rest_client).requested_for(
-            login,
-            max_items=max_items,
-            repository_full_name=repository_full_name,
-        )
+        """Create a repository handle for the GitHub remote configured locally."""
+        return GitHubRepository.from_git_repository(repository, self, remote_name)
 
     def get_authenticated_user(self) -> GitHubAuthInfo:
         """Verify the configured credential and return its GitHub account and API information."""
-        response = self._rest_client.get("/user")
+        response = self.rest.get("/user")
         payload = response.json()
         if not isinstance(payload, dict):
             raise ValueError("GitHub authenticated-user response must be a JSON object")
@@ -85,14 +87,14 @@ class GitHubContext:
             profile_url=profile_url,
             rest_api_url=rest_api_url,
             graphql_api_url=f"{rest_api_url}/graphql",
-            api_version=self._rest_client.API_VERSION,
+            api_version=self.rest.API_VERSION,
             token_scopes=token_scopes,
         )
 
     def close(self) -> None:
         """Close the shared REST and GraphQL clients."""
-        self._rest_client.close()
-        self._graphql_client.close()
+        self.rest.close()
+        self.graphql.close()
 
     def __enter__(self) -> "GitHubContext":
         return self

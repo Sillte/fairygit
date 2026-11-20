@@ -173,7 +173,7 @@ def requested(local: str | None, max_items: int) -> None:
             repository_full_name = None
             if local_repository is not None:
                 repository_full_name = context.from_git_repository(local_repository).full_name
-            return context.list_pull_requests_requested_for_user(
+            return context.pull_request_search.requested_for(
                 auth_info.login,
                 max_items=max_items,
                 repository_full_name=repository_full_name,

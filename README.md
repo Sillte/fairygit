@@ -220,8 +220,7 @@ with GitHubContext() as context:
     pull_requests = repository.pull_requests.list(max_items=100)
 ```
 
-The context reads its token from `GH_TOKEN` or `GITHUB_PAT` and shares its REST client with repositories it creates. Pull Request retrieval is bounded and returns whether more results are available.
-Each returned `GitHubPullRequest` keeps its context privately so related resources can use the same authenticated clients without including them in JSON output.
+The context reads its token from `GH_TOKEN` or `GITHUB_PAT`, owns the REST and GraphQL clients, and passes itself to the handles it creates. Serializable value models live under `fairygit.github.models`; Context-bound `GitHubRepository` and `GitHubPullRequest` operation handles live under `fairygit.github.handles` and expose their data through `.data`. Related-resource facades select `context.rest` or `context.graphql` rather than retaining clients directly. Cross-repository review-request searches are exposed through `context.pull_request_search.requested_for(login)`.
 
 The PR body is included in each returned Pull Request. Review threads (with diff comments) and issue-style conversation comments are retrieved through GraphQL:
 

@@ -7,7 +7,7 @@ import pytest
 from httpx2_mock import mock_httpx2
 
 from fairygit.git import GitRepository
-from fairygit.github import GitHubContext, GitHubPullRequest
+from fairygit.github import GitHubContext, GitHubPullRequest, GitHubRepositoryInfo, PullRequest
 
 
 def _pull_request(number: int) -> dict[str, object]:
@@ -86,18 +86,19 @@ def test_repository_lists_pull_requests_through_shared_context() -> None:
     assert result.items[0].head_repository == "contributor/widgets"
     assert isinstance(result.items[0], GitHubPullRequest)
     assert result.items[0]._context is context
+    assert isinstance(result.items[0].data, PullRequest)
     assert result.items[0].body == "Description"
     assert result.has_more is False
     assert route.calls[0].request.headers["Authorization"] == "Bearer test-token"
     assert route.calls[0].request.url.params["head"] == "contributor:feature-12"
     assert route.calls[0].request.url.params["base"] == "main"
-    assert result.model_dump(mode="json")["items"][0]["number"] == 12
-    assert "context" not in result.model_dump(mode="json")["items"][0]
-    assert repository.model_dump(mode="json") == {
+    assert result.items[0].data.model_dump(mode="json")["number"] == 12
+    assert repository.data.model_dump(mode="json") == {
         "owner": "acme",
         "name": "widgets",
         "remote_name": "origin",
     }
+    assert isinstance(repository.data, GitHubRepositoryInfo)
 
 
 def test_repository_gets_pull_request_by_number() -> None:
@@ -109,6 +110,8 @@ def test_repository_gets_pull_request_by_number() -> None:
 
     assert pull_request.number == 12
     assert pull_request._context is context
+    assert pull_request.threads._context is context
+    assert pull_request.files._context is context
     assert route.calls[0].request.url.path == "/repos/acme/widgets/pulls/12"
 
 
@@ -137,7 +140,7 @@ def test_context_lists_requested_pull_requests_and_paginates() -> None:
             ]
         )
         with GitHubContext(token="test-token") as context:
-            result = context.list_pull_requests_requested_for_user("reviewer", max_items=2)
+            result = context.pull_request_search.requested_for("reviewer", max_items=2)
 
     assert result.items[0].repository == "acme/widgets"
     assert result.items[0].author == "author"
@@ -898,10 +901,14 @@ def test_context_requires_token_when_environment_is_empty(
         GitHubContext()
 
 
-def test_unbound_repository_cannot_access_pull_requests() -> None:
-    from fairygit.github import GitHubRepository
+def test_repository_handle_receives_context_without_serializing_it() -> None:
+    with GitHubContext(token="test-token") as context:
+        repository = context.get_repository("acme", "widgets")
 
-    repository = GitHubRepository(owner="acme", name="widgets", remote_name="origin")
-
-    with pytest.raises(RuntimeError, match="not attached to a GitHubContext"):
-        repository.pull_requests
+        assert repository._context is context
+        assert repository.data.model_dump(mode="json") == {
+            "owner": "acme",
+            "name": "widgets",
+            "remote_name": "origin",
+        }
+        assert repository.pull_requests._context is context
