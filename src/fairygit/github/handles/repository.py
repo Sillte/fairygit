@@ -132,25 +132,25 @@ class _RepositoryPullRequests:
 class GitHubRepository:
     """A Context-bound operation handle around repository identity data."""
 
-    def __init__(self, data: GitHubRepositoryInfo, context: GitHubContext) -> None:
-        self.data = data
+    def __init__(self, value: GitHubRepositoryInfo, context: GitHubContext) -> None:
+        self.value = value
         self._context = context
 
     @property
     def owner(self) -> str:
-        return self.data.owner
+        return self.value.owner
 
     @property
     def name(self) -> str:
-        return self.data.name
+        return self.value.name
 
     @property
     def remote_name(self) -> str:
-        return self.data.remote_name
+        return self.value.remote_name
 
     @property
     def full_name(self) -> str:
-        return self.data.full_name
+        return self.value.full_name
 
     @property
     def pull_requests(self) -> _RepositoryPullRequests:

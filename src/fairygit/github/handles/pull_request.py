@@ -15,51 +15,51 @@ class GitHubPullRequest:
 
     def __init__(
         self,
-        data: PullRequest,
+        value: PullRequest,
         context: GitHubContext,
         repository_owner: str,
         repository_name: str,
     ) -> None:
-        self.data = data
+        self.value = value
         self._context = context
         self._repository_owner = repository_owner
         self._repository_name = repository_name
 
     @property
     def number(self) -> int:
-        return self.data.number
+        return self.value.number
 
     @property
     def title(self) -> str:
-        return self.data.title
+        return self.value.title
 
     @property
     def state(self) -> Literal["open", "closed"]:
-        return self.data.state
+        return self.value.state
 
     @property
     def url(self) -> str:
-        return self.data.url
+        return self.value.url
 
     @property
     def body(self) -> str | None:
-        return self.data.body
+        return self.value.body
 
     @property
     def draft(self) -> bool:
-        return self.data.draft
+        return self.value.draft
 
     @property
     def head_branch(self) -> str:
-        return self.data.head_branch
+        return self.value.head_branch
 
     @property
     def head_repository(self) -> str | None:
-        return self.data.head_repository
+        return self.value.head_repository
 
     @property
     def base_branch(self) -> str:
-        return self.data.base_branch
+        return self.value.base_branch
 
     @property
     def threads(self) -> PullRequestThreads:

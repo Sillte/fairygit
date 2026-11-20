@@ -86,19 +86,19 @@ def test_repository_lists_pull_requests_through_shared_context() -> None:
     assert result.items[0].head_repository == "contributor/widgets"
     assert isinstance(result.items[0], GitHubPullRequest)
     assert result.items[0]._context is context
-    assert isinstance(result.items[0].data, PullRequest)
+    assert isinstance(result.items[0].value, PullRequest)
     assert result.items[0].body == "Description"
     assert result.has_more is False
     assert route.calls[0].request.headers["Authorization"] == "Bearer test-token"
     assert route.calls[0].request.url.params["head"] == "contributor:feature-12"
     assert route.calls[0].request.url.params["base"] == "main"
-    assert result.items[0].data.model_dump(mode="json")["number"] == 12
-    assert repository.data.model_dump(mode="json") == {
+    assert result.items[0].value.model_dump(mode="json")["number"] == 12
+    assert repository.value.model_dump(mode="json") == {
         "owner": "acme",
         "name": "widgets",
         "remote_name": "origin",
     }
-    assert isinstance(repository.data, GitHubRepositoryInfo)
+    assert isinstance(repository.value, GitHubRepositoryInfo)
 
 
 def test_repository_gets_pull_request_by_number() -> None:
@@ -906,7 +906,7 @@ def test_repository_handle_receives_context_without_serializing_it() -> None:
         repository = context.get_repository("acme", "widgets")
 
         assert repository._context is context
-        assert repository.data.model_dump(mode="json") == {
+        assert repository.value.model_dump(mode="json") == {
             "owner": "acme",
             "name": "widgets",
             "remote_name": "origin",
