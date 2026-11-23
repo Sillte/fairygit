@@ -40,7 +40,7 @@ def test_auth_status_reports_account_and_api_information(monkeypatch: pytest.Mon
             "profile_url": "https://github.com/fairy",
             "rest_api_url": "https://api.github.com",
             "graphql_api_url": "https://api.github.com/graphql",
-            "api_version": "2022-11-28",
+            "api_version": "2026-03-10",
             "token_scopes": ["repo", "read:org"],
         },
     }
@@ -554,7 +554,7 @@ def test_pr_view_rejects_api_endpoint_mismatch(
         profile_url="https://github.com/reviewer",
         rest_api_url=rest_api_url,
         graphql_api_url=graphql_api_url,
-        api_version="2022-11-28",
+        api_version="2026-03-10",
         token_scopes=None,
     )
     monkeypatch.setattr(GitHubContext, "get_authenticated_user", lambda self: auth_info)

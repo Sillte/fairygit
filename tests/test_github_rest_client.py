@@ -90,6 +90,7 @@ def test_repository_lists_pull_requests_through_shared_context() -> None:
     assert result.items[0].body == "Description"
     assert result.has_more is False
     assert route.calls[0].request.headers["Authorization"] == "Bearer test-token"
+    assert route.calls[0].request.headers["X-GitHub-Api-Version"] == "2026-03-10"
     assert route.calls[0].request.url.params["head"] == "contributor:feature-12"
     assert route.calls[0].request.url.params["base"] == "main"
     assert result.items[0].value.model_dump(mode="json")["number"] == 12
