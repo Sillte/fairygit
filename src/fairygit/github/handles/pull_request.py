@@ -7,7 +7,12 @@ from fairygit.github.models.pull_request import PullRequest
 
 if TYPE_CHECKING:
     from fairygit.github.context import GitHubContext
-    from fairygit.github.resources.pull_request import PullRequestFiles, PullRequestIssueComments, PullRequestThreads
+    from fairygit.github.resources.pull_request import (
+        PullRequestFiles,
+        PullRequestIssueComments,
+        PullRequestReviews,
+        PullRequestThreads,
+    )
 
 
 class GitHubPullRequest:
@@ -74,6 +79,13 @@ class GitHubPullRequest:
         from fairygit.github.resources.pull_request import PullRequestIssueComments
 
         return PullRequestIssueComments(self, self._context)
+
+    @property
+    def reviews(self) -> PullRequestReviews:
+        """Return operations for pending pull-request reviews."""
+        from fairygit.github.resources.pull_request import PullRequestReviews
+
+        return PullRequestReviews(self, self._context)
 
     @property
     def files(self) -> PullRequestFiles:

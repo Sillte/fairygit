@@ -252,17 +252,28 @@ updated_reply = pull_request.threads.edit_reply(reply, "Updated response.")
 
 If you do not already have a pending review on the pull request, `reply()` creates one and leaves it pending. Neither operation submits or publishes the review. Editing checks the current viewer, comment author, reply relationship, and review state before sending the mutation.
 
+Create a pending top-level review body or a new inline comment thread with:
+
+```python
+pending_review = pull_request.reviews.create_body("Review notes.")
+inline_thread = pull_request.reviews.create_comment("src/example.py", 12, "RIGHT", "Please check this line.")
+```
+
+`create_body()` fills a new or empty pending review and refuses to replace a non-empty body. `create_comment()` creates a new diff thread on the specified file, line, and side. Both return their pending result and leave the review unsubmitted.
+
 ### CLI
 
 `fairygit auth status` verifies the configured GitHub credential with the authenticated-user API and returns the account login, profile URL, REST and GraphQL endpoints, REST API version, and OAuth scopes when GitHub reports them. It never outputs the credential.
 
 PR commands verify the authenticated API address against the REST and GraphQL client endpoints before making PR requests. A mismatch returns an error instead of calling an unexpected API host.
 
-`fairygit pr view --local PATH` finds the pull request matching the current branch's configured upstream and returns its body, review threads, and issue-style conversation comments as JSON. If the branch has no configured upstream, it searches up to 100 open pull requests by local branch name and continues only when the result is unique and the search is complete. Use `--pr NUMBER` to select a pull request explicitly; this bypasses branch matching. These options are also available for `pr files`, `pr diff`, and `pr thread reply/edit`. Add `--exclude-resolved` to omit resolved review threads; their comments are not fetched. Set `GH_TOKEN` or `GITHUB_PAT` to authenticate.
+`fairygit pr view --local PATH` finds the pull request matching the current branch's configured upstream and returns its body, review threads, and issue-style conversation comments as JSON. If the branch has no configured upstream, it searches up to 100 open pull requests by local branch name and continues only when the result is unique and the search is complete. Use `--pr NUMBER` to select a pull request explicitly; this bypasses branch matching. These options are also available for `pr files`, `pr diff`, `pr review draft/comment`, and `pr thread reply/edit`. Add `--exclude-resolved` to omit resolved review threads; their comments are not fetched. Set `GH_TOKEN` or `GITHUB_PAT` to authenticate.
 
 `fairygit pr files --local PATH` returns changed-file metadata for the matching pull request without patches. Use `--max-files` to set the result limit (default 100, maximum 1000); the response includes `has_more` when additional files are available. `fairygit pr diff --local PATH --file FILEPATH` returns the metadata and patch for one changed file. Its `--max-files` option bounds the search (default and maximum 1000). The patch is `null` when GitHub does not provide one, such as for some binary or large files.
 
 `fairygit pr requested [--local PATH]` lists open pull requests requesting review from the authenticated user across accessible repositories. Use `--local PATH` to limit the search to the repository configured by that local repository's `origin` remote. `--max-items` bounds the result (default 100, maximum 1000); the JSON includes `total_count`, `has_more`, and `incomplete_results`.
+
+`fairygit pr review draft --local PATH --body TEXT` creates a pending top-level review body. Use `--body -` to read multiline text from standard input. If a pending review already has a non-empty body, the command fails rather than replacing it. `fairygit pr review comment --local PATH --file FILEPATH --line LINE [--side LEFT|RIGHT] --body TEXT` creates a new inline comment thread in the pending review, creating that review if needed. The side defaults to `RIGHT`; specify `LEFT` to comment on the old side of the diff. Both commands return JSON and leave the review pending; they do not submit it.
 
 The command requires exactly one matching pull request. It returns a JSON error and a non-zero exit status if no pull request matches, multiple pull requests match, or an upstream-free search is truncated. In those cases, specify `--pr NUMBER` when the intended pull request is known. Thread and issue-comment results are bounded to 100 items and include `has_more` when additional results are available. When resolved threads are excluded, the thread limit applies to unresolved threads.
 
@@ -282,6 +293,14 @@ Pending review replies can be created or edited with:
 ```console
 fairygit pr thread reply --local PATH --pr 123 --thread-id THREAD_ID --body "Reply text"
 fairygit pr thread edit --local PATH --pr 123 --comment-id COMMENT_ID --body "Updated reply text"
+```
+
+New pending review bodies and inline comment threads can be created with:
+
+```console
+fairygit pr review draft --local PATH --body "Review notes"
+fairygit pr review comment --local PATH --file src/example.py --line 12 --body "Please check this line"
+fairygit pr review comment --local PATH --file src/example.py --line 12 --side LEFT --body "Check the removed line"
 ```
 
 Use `--body -` to read the body from standard input, which is useful for multiline text. The reply command adds the reply to your existing pending review or creates one if needed. The edit command accepts a review comment ID and succeeds only for your own reply in a pending review belonging to the PR matched by `--local`. Both commands return the resulting comment as JSON; neither submits the review.

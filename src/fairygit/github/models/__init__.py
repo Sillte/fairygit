@@ -2,6 +2,7 @@ from .auth import GitHubAuthInfo
 from .comments import (
     GitHubComment,
     GitHubIssueCommentPage,
+    GitHubPendingReview,
     GitHubReviewComment,
     GitHubReviewState,
     GitHubReviewThread,
@@ -20,6 +21,7 @@ __all__ = [
     "GitHubComment",
     "GitHubAuthInfo",
     "GitHubIssueCommentPage",
+    "GitHubPendingReview",
     "GitHubRepositoryInfo",
     "GitHubReviewComment",
     "GitHubReviewState",

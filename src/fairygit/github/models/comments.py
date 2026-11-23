@@ -34,6 +34,20 @@ class GitHubReviewComment(GitHubComment):
         return self.review_state == "PENDING"
 
 
+class GitHubPendingReview(BaseModel):
+    """A pending pull-request review with its top-level body."""
+
+    id: str = Field(description="GitHub node ID for the pending review")
+    body: str = Field(description="Pending review body")
+    review_state: Literal["PENDING"] = Field(description="State of the review")
+
+    @computed_field
+    @property
+    def is_pending(self) -> bool:
+        """Return whether this review is pending."""
+        return True
+
+
 class GitHubReviewThread(BaseModel):
     """A review thread and its bounded set of comments."""
 

@@ -135,8 +135,15 @@ class _ReviewTargetData(BaseModel):
     node: _ThreadTarget | None
 
 
+class _ReviewContextData(BaseModel):
+    viewer: _Viewer
+    repository: _RepositoryTarget | None
+
+
 class _ReviewNode(BaseModel):
     id: str
+    body: str | None
+    state: GitHubReviewState
 
 
 class _ReviewConnection(BaseModel):
@@ -153,6 +160,7 @@ class _NodeReviews(BaseModel):
 
 class _CreatedReview(BaseModel):
     id: str
+    body: str | None = None
     state: GitHubReviewState
 
 
@@ -164,12 +172,28 @@ class _CreateReviewData(BaseModel):
     addPullRequestReview: _CreateReviewPayload
 
 
+class _UpdateReviewPayload(BaseModel):
+    pullRequestReview: _CreatedReview | None
+
+
+class _UpdateReviewData(BaseModel):
+    updatePullRequestReview: _UpdateReviewPayload
+
+
 class _MutationCommentPayload(BaseModel):
     comment: _CommentNode | None
 
 
 class _AddReplyData(BaseModel):
     addPullRequestReviewThreadReply: _MutationCommentPayload
+
+
+class _AddReviewThreadPayload(BaseModel):
+    thread: _ThreadNode | None
+
+
+class _AddReviewThreadData(BaseModel):
+    addPullRequestReviewThread: _AddReviewThreadPayload
 
 
 class _UpdateCommentPayload(BaseModel):

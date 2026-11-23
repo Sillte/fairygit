@@ -234,6 +234,63 @@ def diff(local: str, pull_request_number: int | None, filename: str, max_files: 
 
 
 @pr.group()
+def review() -> None:
+    """Create pending pull-request review drafts."""
+
+
+@review.command()
+@click.option("--local", required=True, help="Path to a local Git repository")
+@click.option("--pr", "pull_request_number", type=click.IntRange(min=1), help="Select a pull request by number")
+@click.option("--body", required=True, help="Review body, or '-' to read from stdin")
+def draft(local: str, pull_request_number: int | None, body: str) -> None:
+    """Create a pending review body without submitting the review."""
+
+    def operation() -> dict[str, object]:
+        local_repository = GitRepository.from_path(Path(local))
+        with GitHubContext() as context:
+            _verify_api_endpoints(context)
+            pull_request = _current_pull_request(context, local_repository, pull_request_number)
+            pending_review = pull_request.reviews.create_body(_read_body(body))
+            return pending_review.model_dump(mode="json")
+
+    _emit_json({"success": True, "result": _run_operation(operation)})
+
+
+@review.command()
+@click.option("--local", required=True, help="Path to a local Git repository")
+@click.option("--pr", "pull_request_number", type=click.IntRange(min=1), help="Select a pull request by number")
+@click.option("--file", "filename", required=True, help="Path of the file in the pull request")
+@click.option("--line", type=click.IntRange(min=1), required=True, help="Line number in the file diff")
+@click.option(
+    "--side",
+    type=click.Choice(["LEFT", "RIGHT"]),
+    default="RIGHT",
+    show_default=True,
+    help="Diff side for the line",
+)
+@click.option("--body", required=True, help="Comment text, or '-' to read from stdin")
+def comment(
+    local: str,
+    pull_request_number: int | None,
+    filename: str,
+    line: int,
+    side: str,
+    body: str,
+) -> None:
+    """Create a new inline comment thread in a pending review."""
+
+    def operation() -> dict[str, object]:
+        local_repository = GitRepository.from_path(Path(local))
+        with GitHubContext() as context:
+            _verify_api_endpoints(context)
+            pull_request = _current_pull_request(context, local_repository, pull_request_number)
+            thread = pull_request.reviews.create_comment(filename, line, side, _read_body(body))
+            return thread.model_dump(mode="json")
+
+    _emit_json({"success": True, "result": _run_operation(operation)})
+
+
+@pr.group()
 def thread() -> None:
     """Create and edit review thread replies."""
 

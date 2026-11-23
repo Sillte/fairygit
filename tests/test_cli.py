@@ -589,6 +589,171 @@ def _review_reply(comment_id: str, body: str) -> dict[str, object]:
     }
 
 
+def _review_comment(comment_id: str, body: str) -> dict[str, object]:
+    return {
+        "id": comment_id,
+        "body": body,
+        "createdAt": "2026-11-11T00:00:00Z",
+        "url": f"https://github.com/acme/widgets/pull/12#discussion_r{comment_id}",
+        "author": {"login": "reviewer"},
+        "path": "src/example.py",
+        "line": 12,
+        "replyTo": None,
+        "pullRequestReview": {"state": "PENDING"},
+    }
+
+
+def test_pr_review_draft_creates_pending_review_body(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GH_TOKEN", "test-token")
+    local_path = _create_local_repository(tmp_path / "repo")
+    rest_url = "https://api.github.com/repos/acme/widgets/pulls"
+    graphql_url = "https://api.github.com/graphql"
+    with mock_httpx2(assert_all_called=True) as router:
+        _mock_authenticated_user(router)
+        router.get(rest_url).mock(return_value=httpx2.Response(200, json=[_pull_request(12)]))
+        graphql_route = router.post(graphql_url).mock(
+            side_effect=[
+                httpx2.Response(
+                    200,
+                    json={
+                        "data": {
+                            "viewer": {"login": "reviewer"},
+                            "repository": {"pullRequest": {"id": "pr-node-id"}},
+                        }
+                    },
+                ),
+                httpx2.Response(200, json={"data": {"node": {"reviews": {"nodes": []}}}}),
+                httpx2.Response(
+                    200,
+                    json={
+                        "data": {
+                            "addPullRequestReview": {
+                                "pullRequestReview": {
+                                    "id": "pending-review-id",
+                                    "body": "Review draft.",
+                                    "state": "PENDING",
+                                }
+                            }
+                        }
+                    },
+                ),
+            ]
+        )
+
+        result = CliRunner().invoke(
+            app,
+            ["pr", "review", "draft", "--local", str(local_path), "--body", "-"],
+            input="Review draft.",
+        )
+
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {
+        "success": True,
+        "result": {
+            "id": "pending-review-id",
+            "body": "Review draft.",
+            "review_state": "PENDING",
+            "is_pending": True,
+        },
+    }
+    assert "submitPullRequestReview" not in graphql_route.calls[-1].request.content.decode()
+
+
+@pytest.mark.parametrize(
+    ("side_args", "expected_side"),
+    [([], "RIGHT"), (["--side", "LEFT"], "LEFT")],
+)
+def test_pr_review_comment_creates_pending_inline_comment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    side_args: list[str],
+    expected_side: str,
+) -> None:
+    monkeypatch.setenv("GH_TOKEN", "test-token")
+    local_path = _create_local_repository(tmp_path / "repo")
+    rest_url = "https://api.github.com/repos/acme/widgets/pulls"
+    graphql_url = "https://api.github.com/graphql"
+    with mock_httpx2(assert_all_called=True) as router:
+        _mock_authenticated_user(router)
+        router.get(rest_url).mock(return_value=httpx2.Response(200, json=[_pull_request(12)]))
+        graphql_route = router.post(graphql_url).mock(
+            side_effect=[
+                httpx2.Response(
+                    200,
+                    json={
+                        "data": {
+                            "viewer": {"login": "reviewer"},
+                            "repository": {"pullRequest": {"id": "pr-node-id"}},
+                        }
+                    },
+                ),
+                httpx2.Response(
+                    200,
+                    json={
+                        "data": {
+                            "node": {
+                                "reviews": {
+                                    "nodes": [{"id": "pending-review-id", "body": "", "state": "PENDING"}]
+                                }
+                            }
+                        }
+                    },
+                ),
+                httpx2.Response(
+                    200,
+                    json={
+                        "data": {
+                            "addPullRequestReviewThread": {
+                                "thread": {
+                                    "id": "thread-id",
+                                    "path": "src/example.py",
+                                    "line": 12,
+                                    "isResolved": False,
+                                    "isOutdated": False,
+                                    "comments": {
+                                        "nodes": [_review_comment("comment-id", "Inline draft.")],
+                                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                    },
+                                }
+                            }
+                        }
+                    },
+                ),
+            ]
+        )
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "pr",
+                "review",
+                "comment",
+                "--local",
+                str(local_path),
+                "--file",
+                "src/example.py",
+                "--line",
+                "12",
+                *side_args,
+                "--body",
+                "Inline draft.",
+            ],
+        )
+
+    assert result.exit_code == 0
+    result_data = json.loads(result.output)["result"]
+    assert result_data["id"] == "thread-id"
+    assert result_data["comments"][0]["body"] == "Inline draft."
+    assert result_data["comments"][0]["is_pending"] is True
+    mutation = json.loads(graphql_route.calls[-1].request.content.decode())
+    assert "addPullRequestReviewThread(" in mutation["query"]
+    assert mutation["variables"]["side"] == expected_side
+    assert "submitPullRequestReview" not in mutation["query"]
+
+
 def test_pr_thread_reply_creates_pending_reply(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -614,7 +779,15 @@ def test_pr_thread_reply_creates_pending_reply(
                 ),
                 httpx2.Response(
                     200,
-                    json={"data": {"node": {"reviews": {"nodes": [{"id": "pending-review-id"}]}}}},
+                    json={
+                        "data": {
+                            "node": {
+                                "reviews": {
+                                    "nodes": [{"id": "pending-review-id", "body": "", "state": "PENDING"}]
+                                }
+                            }
+                        }
+                    },
                 ),
                 httpx2.Response(
                     200,

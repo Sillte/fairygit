@@ -71,6 +71,20 @@ def _review_reply(comment_id: str, review_state: str = "PENDING", body: str | No
     }
 
 
+def _review_comment(comment_id: str, body: str, review_state: str = "PENDING") -> dict[str, object]:
+    return {
+        "id": comment_id,
+        "body": body,
+        "createdAt": "2026-11-11T00:00:00Z",
+        "url": f"https://github.com/acme/widgets/pull/12#discussion_r{comment_id}",
+        "author": {"login": "reviewer"},
+        "path": "src/example.py",
+        "line": 12,
+        "replyTo": None,
+        "pullRequestReview": {"state": review_state},
+    }
+
+
 def test_repository_lists_pull_requests_through_shared_context() -> None:
     route_url = "https://api.github.com/repos/acme/widgets/pulls"
     with mock_httpx2(assert_all_called=True) as router:
@@ -470,7 +484,15 @@ def test_thread_reply_is_added_to_existing_pending_review() -> None:
                 ),
                 httpx.Response(
                     200,
-                    json={"data": {"node": {"reviews": {"nodes": [{"id": "pending-review-id"}]}}}},
+                    json={
+                        "data": {
+                            "node": {
+                                "reviews": {
+                                    "nodes": [{"id": "pending-review-id", "body": "", "state": "PENDING"}]
+                                }
+                            }
+                        }
+                    },
                 ),
                 httpx.Response(
                     200,
@@ -497,6 +519,236 @@ def test_thread_reply_is_added_to_existing_pending_review() -> None:
     reply_payload = graphql_route.calls[2].request.content.decode()
     assert "pending-review-id" in reply_payload
     assert "thread-node-id" in reply_payload
+
+
+def test_pending_review_body_is_created_without_submitting() -> None:
+    graphql_url = "https://api.github.com/graphql"
+    rest_url = "https://api.github.com/repos/acme/widgets/pulls"
+    with mock_httpx2(assert_all_called=True) as router:
+        router.get(rest_url).mock(return_value=httpx.Response(200, json=[_pull_request(12)]))
+        graphql_route = router.post(graphql_url).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "viewer": {"login": "reviewer"},
+                            "repository": {"pullRequest": {"id": "pr-node-id"}},
+                        }
+                    },
+                ),
+                httpx.Response(200, json={"data": {"node": {"reviews": {"nodes": []}}}}),
+                httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "addPullRequestReview": {
+                                "pullRequestReview": {
+                                    "id": "pending-review-id",
+                                    "body": "Review draft.",
+                                    "state": "PENDING",
+                                }
+                            }
+                        }
+                    },
+                ),
+            ]
+        )
+        with GitHubContext(token="test-token") as context:
+            pull_request = context.get_repository("acme", "widgets").pull_requests.list().items[0]
+            review = pull_request.reviews.create_body("Review draft.")
+
+    assert review.id == "pending-review-id"
+    assert review.body == "Review draft."
+    assert review.is_pending is True
+    create_payload = graphql_route.calls[2].request.content.decode()
+    assert "addPullRequestReview(" in create_payload
+    assert "Review draft." in create_payload
+    assert "submitPullRequestReview" not in create_payload
+
+
+def test_pending_review_body_fills_an_empty_draft_but_does_not_replace_text() -> None:
+    graphql_url = "https://api.github.com/graphql"
+    rest_url = "https://api.github.com/repos/acme/widgets/pulls"
+    with mock_httpx2(assert_all_called=True) as router:
+        router.get(rest_url).mock(return_value=httpx.Response(200, json=[_pull_request(12)]))
+        graphql_route = router.post(graphql_url).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "viewer": {"login": "reviewer"},
+                            "repository": {"pullRequest": {"id": "pr-node-id"}},
+                        }
+                    },
+                ),
+                httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "node": {
+                                "reviews": {
+                                    "nodes": [{"id": "pending-review-id", "body": "", "state": "PENDING"}]
+                                }
+                            }
+                        }
+                    },
+                ),
+                httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "updatePullRequestReview": {
+                                "pullRequestReview": {
+                                    "id": "pending-review-id",
+                                    "body": "Review draft.",
+                                    "state": "PENDING",
+                                }
+                            }
+                        }
+                    },
+                ),
+            ]
+        )
+        with GitHubContext(token="test-token") as context:
+            pull_request = context.get_repository("acme", "widgets").pull_requests.list().items[0]
+            review = pull_request.reviews.create_body("Review draft.")
+
+    assert review.body == "Review draft."
+    assert review.is_pending is True
+    assert "updatePullRequestReview(" in graphql_route.calls[2].request.content.decode()
+
+
+def test_pending_review_body_does_not_overwrite_existing_text() -> None:
+    graphql_url = "https://api.github.com/graphql"
+    rest_url = "https://api.github.com/repos/acme/widgets/pulls"
+    with mock_httpx2(assert_all_called=True) as router:
+        router.get(rest_url).mock(return_value=httpx.Response(200, json=[_pull_request(12)]))
+        graphql_route = router.post(graphql_url).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "viewer": {"login": "reviewer"},
+                            "repository": {"pullRequest": {"id": "pr-node-id"}},
+                        }
+                    },
+                ),
+                httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "node": {
+                                "reviews": {
+                                    "nodes": [
+                                        {
+                                            "id": "pending-review-id",
+                                            "body": "Keep this text.",
+                                            "state": "PENDING",
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                ),
+            ]
+        )
+        with GitHubContext(token="test-token") as context:
+            pull_request = context.get_repository("acme", "widgets").pull_requests.list().items[0]
+            with pytest.raises(ValueError, match="refusing to overwrite it"):
+                pull_request.reviews.create_body("Replacement text.")
+
+    assert len(graphql_route.calls) == 2
+
+
+def test_inline_review_comment_creates_pending_thread() -> None:
+    graphql_url = "https://api.github.com/graphql"
+    rest_url = "https://api.github.com/repos/acme/widgets/pulls"
+    with mock_httpx2(assert_all_called=True) as router:
+        router.get(rest_url).mock(return_value=httpx.Response(200, json=[_pull_request(12)]))
+        graphql_route = router.post(graphql_url).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "viewer": {"login": "reviewer"},
+                            "repository": {"pullRequest": {"id": "pr-node-id"}},
+                        }
+                    },
+                ),
+                httpx.Response(200, json={"data": {"node": {"reviews": {"nodes": []}}}}),
+                httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "addPullRequestReview": {
+                                "pullRequestReview": {"id": "pending-review-id", "state": "PENDING"}
+                            }
+                        }
+                    },
+                ),
+                httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "addPullRequestReviewThread": {
+                                "thread": {
+                                    "id": "thread-id",
+                                    "path": "src/example.py",
+                                    "line": 12,
+                                    "isResolved": False,
+                                    "isOutdated": False,
+                                    "comments": {
+                                        "nodes": [_review_comment("comment-id", "Inline draft.")],
+                                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                    },
+                                }
+                            }
+                        }
+                    },
+                ),
+            ]
+        )
+        with GitHubContext(token="test-token") as context:
+            pull_request = context.get_repository("acme", "widgets").pull_requests.list().items[0]
+            thread = pull_request.reviews.create_comment("src/example.py", 12, "RIGHT", "Inline draft.")
+
+    assert thread.id == "thread-id"
+    assert thread.comments[0].body == "Inline draft."
+    assert thread.comments[0].is_pending is True
+    mutation_payload = graphql_route.calls[3].request.content.decode()
+    assert "addPullRequestReviewThread(" in mutation_payload
+    assert '"side":"RIGHT"' in mutation_payload
+    assert "submitPullRequestReview" not in mutation_payload
+
+
+@pytest.mark.parametrize(
+    ("path", "line", "side", "body", "error"),
+    [
+        (" ", 12, "RIGHT", "Comment.", "File path must not be empty"),
+        ("src/example.py", 0, "RIGHT", "Comment.", "Line must be greater than zero"),
+        ("src/example.py", 12, "CENTER", "Comment.", "Side must be LEFT or RIGHT"),
+        ("src/example.py", 12, "RIGHT", "  ", "Comment body must not be empty"),
+    ],
+)
+def test_inline_review_comment_rejects_invalid_input_before_graphql_request(
+    path: str,
+    line: int,
+    side: str,
+    body: str,
+    error: str,
+) -> None:
+    rest_url = "https://api.github.com/repos/acme/widgets/pulls"
+    with mock_httpx2(assert_all_called=True) as router:
+        router.get(rest_url).mock(return_value=httpx.Response(200, json=[_pull_request(12)]))
+        with GitHubContext(token="test-token") as context:
+            pull_request = context.get_repository("acme", "widgets").pull_requests.list().items[0]
+            with pytest.raises(ValueError, match=error):
+                pull_request.reviews.create_comment(path, line, side, body)
 
 
 def test_thread_reply_creates_pending_review_if_needed() -> None:

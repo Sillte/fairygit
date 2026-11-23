@@ -11,8 +11,6 @@ from fairygit.github.models.comments import (
 from ._base import _PullRequestResource, validate_comment_body, validate_limit
 from ._models import (
     _AddReplyData,
-    _CreateReviewData,
-    _NodeReviews,
     _PendingReplyData,
     _ReviewTargetData,
     _ThreadCommentQueryData,
@@ -90,26 +88,6 @@ query($owner: String!, $name: String!, $number: Int!, $threadId: ID!) {
 }
 """
 
-_PENDING_REVIEWS_QUERY = """
-query($pullRequestId: ID!, $author: String!) {
-  node(id: $pullRequestId) {
-    ... on PullRequest {
-      reviews(first: 1, author: $author, states: [PENDING]) {
-        nodes { id }
-      }
-    }
-  }
-}
-"""
-
-_CREATE_PENDING_REVIEW_MUTATION = """
-mutation($pullRequestId: ID!) {
-  addPullRequestReview(input: {pullRequestId: $pullRequestId}) {
-    pullRequestReview { id state }
-  }
-}
-"""
-
 _ADD_THREAD_REPLY_MUTATION = """
 mutation($threadId: ID!, $reviewId: ID!, $body: String!) {
   addPullRequestReviewThreadReply(input: {
@@ -179,8 +157,6 @@ mutation($commentId: ID!, $body: String!) {
 _thread_query_data = TypeAdapter(_ThreadQueryData)
 _thread_comment_query_data = TypeAdapter(_ThreadCommentQueryData)
 _review_target_data = TypeAdapter(_ReviewTargetData)
-_node_reviews = TypeAdapter(_NodeReviews)
-_create_review_data = TypeAdapter(_CreateReviewData)
 _add_reply_data = TypeAdapter(_AddReplyData)
 _pending_reply_data = TypeAdapter(_PendingReplyData)
 _update_comment_data = TypeAdapter(_UpdateCommentData)
@@ -369,24 +345,4 @@ class PullRequestThreads(_PullRequestResource):
             raise ValueError("Review thread was not found")
         if thread.pullRequest.id != pull_request.id:
             raise ValueError("Review thread does not belong to this pull request")
-
-        pending_data = _node_reviews.validate_python(
-            self._context.graphql.execute(
-                _PENDING_REVIEWS_QUERY,
-                {"pullRequestId": pull_request.id, "author": target_data.viewer.login},
-            )
-        )
-        review_connection = pending_data.node.reviews if pending_data.node else None
-        if review_connection is not None and review_connection.nodes:
-            return review_connection.nodes[0].id
-
-        created_data = _create_review_data.validate_python(
-            self._context.graphql.execute(
-                _CREATE_PENDING_REVIEW_MUTATION,
-                {"pullRequestId": pull_request.id},
-            )
-        )
-        review = created_data.addPullRequestReview.pullRequestReview
-        if review is None or review.state != "PENDING":
-            raise ValueError("GitHub did not create a pending pull request review")
-        return review.id
+        return self._pull_request.reviews.get_or_create_pending_review_id(pull_request.id, target_data.viewer.login)
