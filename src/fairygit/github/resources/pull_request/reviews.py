@@ -11,7 +11,6 @@ from ._models import (
     _NodeReviews,
     _ReviewContextData,
     _ReviewNode,
-    _UpdateReviewData,
 )
 
 _PULL_REQUEST_REVIEW_CONTEXT_QUERY = """
@@ -28,7 +27,7 @@ query($pullRequestId: ID!, $author: String!) {
   node(id: $pullRequestId) {
     ... on PullRequest {
       reviews(first: 2, author: $author, states: [PENDING]) {
-        nodes { id body state }
+        nodes { id state }
       }
     }
   }
@@ -46,14 +45,6 @@ mutation($pullRequestId: ID!) {
 _CREATE_PENDING_REVIEW_WITH_BODY_MUTATION = """
 mutation($pullRequestId: ID!, $body: String!) {
   addPullRequestReview(input: {pullRequestId: $pullRequestId, body: $body}) {
-    pullRequestReview { id body state }
-  }
-}
-"""
-
-_UPDATE_PENDING_REVIEW_BODY_MUTATION = """
-mutation($reviewId: ID!, $body: String!) {
-  updatePullRequestReview(input: {pullRequestReviewId: $reviewId, body: $body}) {
     pullRequestReview { id body state }
   }
 }
@@ -97,7 +88,6 @@ mutation($pullRequestId: ID!, $reviewId: ID!, $path: String!, $line: Int!, $side
 _review_context_data = TypeAdapter(_ReviewContextData)
 _node_reviews = TypeAdapter(_NodeReviews)
 _create_review_data = TypeAdapter(_CreateReviewData)
-_update_review_data = TypeAdapter(_UpdateReviewData)
 _add_review_thread_data = TypeAdapter(_AddReviewThreadData)
 
 
@@ -105,32 +95,22 @@ class PullRequestReviews(_PullRequestResource):
     """Create work in the current user's pending pull-request review."""
 
     def create_body(self, body: str) -> GitHubPendingReview:
-        """Create a pending review body or fill an empty body without replacing existing text."""
+        """Create a pending review body when no pending review exists."""
         validate_comment_body(body)
         pull_request_id, author = self._review_context()
         pending_review = self._pending_review(pull_request_id, author)
-        if pending_review is None:
-            data = _create_review_data.validate_python(
-                self._context.graphql.execute(
-                    _CREATE_PENDING_REVIEW_WITH_BODY_MUTATION,
-                    {"pullRequestId": pull_request_id, "body": body},
-                )
+        if pending_review is not None:
+            raise ValueError("A pending review already exists; create its body before adding comments or replies")
+
+        data = _create_review_data.validate_python(
+            self._context.graphql.execute(
+                _CREATE_PENDING_REVIEW_WITH_BODY_MUTATION,
+                {"pullRequestId": pull_request_id, "body": body},
             )
-            review = data.addPullRequestReview.pullRequestReview
-            if review is None:
-                raise ValueError("GitHub GraphQL response is missing the created pull request review")
-        else:
-            if pending_review.body and pending_review.body.strip():
-                raise ValueError("Pending review already has a body; refusing to overwrite it")
-            data = _update_review_data.validate_python(
-                self._context.graphql.execute(
-                    _UPDATE_PENDING_REVIEW_BODY_MUTATION,
-                    {"reviewId": pending_review.id, "body": body},
-                )
-            )
-            review = data.updatePullRequestReview.pullRequestReview
-            if review is None:
-                raise ValueError("GitHub GraphQL response is missing the updated pull request review")
+        )
+        review = data.addPullRequestReview.pullRequestReview
+        if review is None:
+            raise ValueError("GitHub GraphQL response is missing the created pull request review")
 
         if review.state != "PENDING":
             raise ValueError("GitHub did not keep the review pending")

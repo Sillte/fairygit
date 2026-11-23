@@ -488,7 +488,7 @@ def test_thread_reply_is_added_to_existing_pending_review() -> None:
                         "data": {
                             "node": {
                                 "reviews": {
-                                    "nodes": [{"id": "pending-review-id", "body": "", "state": "PENDING"}]
+                                    "nodes": [{"id": "pending-review-id", "state": "PENDING"}]
                                 }
                             }
                         }
@@ -567,60 +567,7 @@ def test_pending_review_body_is_created_without_submitting() -> None:
     assert "submitPullRequestReview" not in create_payload
 
 
-def test_pending_review_body_fills_an_empty_draft_but_does_not_replace_text() -> None:
-    graphql_url = "https://api.github.com/graphql"
-    rest_url = "https://api.github.com/repos/acme/widgets/pulls"
-    with mock_httpx2(assert_all_called=True) as router:
-        router.get(rest_url).mock(return_value=httpx.Response(200, json=[_pull_request(12)]))
-        graphql_route = router.post(graphql_url).mock(
-            side_effect=[
-                httpx.Response(
-                    200,
-                    json={
-                        "data": {
-                            "viewer": {"login": "reviewer"},
-                            "repository": {"pullRequest": {"id": "pr-node-id"}},
-                        }
-                    },
-                ),
-                httpx.Response(
-                    200,
-                    json={
-                        "data": {
-                            "node": {
-                                "reviews": {
-                                    "nodes": [{"id": "pending-review-id", "body": "", "state": "PENDING"}]
-                                }
-                            }
-                        }
-                    },
-                ),
-                httpx.Response(
-                    200,
-                    json={
-                        "data": {
-                            "updatePullRequestReview": {
-                                "pullRequestReview": {
-                                    "id": "pending-review-id",
-                                    "body": "Review draft.",
-                                    "state": "PENDING",
-                                }
-                            }
-                        }
-                    },
-                ),
-            ]
-        )
-        with GitHubContext(token="test-token") as context:
-            pull_request = context.get_repository("acme", "widgets").pull_requests.list().items[0]
-            review = pull_request.reviews.create_body("Review draft.")
-
-    assert review.body == "Review draft."
-    assert review.is_pending is True
-    assert "updatePullRequestReview(" in graphql_route.calls[2].request.content.decode()
-
-
-def test_pending_review_body_does_not_overwrite_existing_text() -> None:
+def test_pending_review_body_rejects_an_existing_pending_review() -> None:
     graphql_url = "https://api.github.com/graphql"
     rest_url = "https://api.github.com/repos/acme/widgets/pulls"
     with mock_httpx2(assert_all_called=True) as router:
@@ -645,7 +592,6 @@ def test_pending_review_body_does_not_overwrite_existing_text() -> None:
                                     "nodes": [
                                         {
                                             "id": "pending-review-id",
-                                            "body": "Keep this text.",
                                             "state": "PENDING",
                                         }
                                     ]
@@ -658,8 +604,8 @@ def test_pending_review_body_does_not_overwrite_existing_text() -> None:
         )
         with GitHubContext(token="test-token") as context:
             pull_request = context.get_repository("acme", "widgets").pull_requests.list().items[0]
-            with pytest.raises(ValueError, match="refusing to overwrite it"):
-                pull_request.reviews.create_body("Replacement text.")
+            with pytest.raises(ValueError, match="A pending review already exists"):
+                pull_request.reviews.create_body("Review draft.")
 
     assert len(graphql_route.calls) == 2
 

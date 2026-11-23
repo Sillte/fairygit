@@ -238,11 +238,11 @@ def review() -> None:
     """Create pending pull-request review drafts."""
 
 
-@review.command()
+@review.command(name="body")
 @click.option("--local", required=True, help="Path to a local Git repository")
 @click.option("--pr", "pull_request_number", type=click.IntRange(min=1), help="Select a pull request by number")
 @click.option("--body", required=True, help="Review body, or '-' to read from stdin")
-def draft(local: str, pull_request_number: int | None, body: str) -> None:
+def review_body(local: str, pull_request_number: int | None, body: str) -> None:
     """Create a pending review body without submitting the review."""
 
     def operation() -> dict[str, object]:

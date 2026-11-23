@@ -603,7 +603,7 @@ def _review_comment(comment_id: str, body: str) -> dict[str, object]:
     }
 
 
-def test_pr_review_draft_creates_pending_review_body(
+def test_pr_review_body_creates_pending_review_body(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -645,7 +645,7 @@ def test_pr_review_draft_creates_pending_review_body(
 
         result = CliRunner().invoke(
             app,
-            ["pr", "review", "draft", "--local", str(local_path), "--body", "-"],
+            ["pr", "review", "body", "--local", str(local_path), "--body", "-"],
             input="Review draft.",
         )
 
@@ -696,7 +696,7 @@ def test_pr_review_comment_creates_pending_inline_comment(
                         "data": {
                             "node": {
                                 "reviews": {
-                                    "nodes": [{"id": "pending-review-id", "body": "", "state": "PENDING"}]
+                                    "nodes": [{"id": "pending-review-id", "state": "PENDING"}]
                                 }
                             }
                         }
@@ -783,7 +783,7 @@ def test_pr_thread_reply_creates_pending_reply(
                         "data": {
                             "node": {
                                 "reviews": {
-                                    "nodes": [{"id": "pending-review-id", "body": "", "state": "PENDING"}]
+                                    "nodes": [{"id": "pending-review-id", "state": "PENDING"}]
                                 }
                             }
                         }

@@ -142,7 +142,6 @@ class _ReviewContextData(BaseModel):
 
 class _ReviewNode(BaseModel):
     id: str
-    body: str | None
     state: GitHubReviewState
 
 
@@ -170,14 +169,6 @@ class _CreateReviewPayload(BaseModel):
 
 class _CreateReviewData(BaseModel):
     addPullRequestReview: _CreateReviewPayload
-
-
-class _UpdateReviewPayload(BaseModel):
-    pullRequestReview: _CreatedReview | None
-
-
-class _UpdateReviewData(BaseModel):
-    updatePullRequestReview: _UpdateReviewPayload
 
 
 class _MutationCommentPayload(BaseModel):
